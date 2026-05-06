@@ -3,15 +3,15 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
-  base: "/billing/",
+  base: "/",
 
   plugins: [
     react(),
 
     VitePWA({
-      base: "/billing/",
+      base: "/",
 
-      scope: "/billing/",
+      scope: "/",
 
       registerType: "autoUpdate",
 
@@ -24,19 +24,19 @@ export default defineConfig({
 
         display: "standalone",
 
-        start_url: "/billing/",
+        start_url: "/",
 
-        scope: "/billing/",
+        scope: "/",
 
         icons: [
           {
-            src: "/billing/icon-192.png",
+            src: "/icon-192.png",
             sizes: "192x192",
             type: "image/png",
           },
 
           {
-            src: "/billing/icon-512.png",
+            src: "/icon-512.png",
             sizes: "512x512",
             type: "image/png",
           },
