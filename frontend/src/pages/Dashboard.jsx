@@ -12,6 +12,7 @@ import api from "../utils/api";
 import PageHeader from "../components/shared/PageHeader";
 import { toast } from "react-toastify";
 import { useAuth } from "../context/AuthContext";
+import { formatIndiaDate } from "../utils/time";
 
 ChartJS.register(
   CategoryScale, LinearScale, BarElement, LineElement,
@@ -35,7 +36,7 @@ function formatCurrency(n) {
 
 function formatDate(str) {
   if (!str) return "";
-  return new Date(String(str).replace(" ", "T")).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+  return formatIndiaDate(str, { year: undefined });
 }
 
 export default function Dashboard() {

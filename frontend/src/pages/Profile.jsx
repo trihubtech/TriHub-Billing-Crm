@@ -6,6 +6,8 @@ import AuthImage from "../components/shared/AuthImage";
 import PageHeader from "../components/shared/PageHeader";
 import PhoneInput from "../components/shared/PhoneInput";
 import { hasPermission } from "../utils/permissions";
+import { INDIAN_STATES, deriveStateFromGstin, isIndianCountry } from "../utils/gst";
+import { formatIndiaDate, formatIndiaDateTime } from "../utils/time";
 
 function mapUserToForm(user) {
   return {
@@ -24,10 +26,18 @@ function mapCompanyToForm(company) {
     phone: company?.phone || "",
     email: company?.email || "",
     gstin: company?.gstin || "",
+    country: company?.country || "India",
+    state_code: company?.state_code || "",
+    state_name: company?.state_name || "",
     pan: company?.pan || "",
     website: company?.website || "",
+    bank_name: company?.bank_name || "",
+    bank_account_number: company?.bank_account_number || "",
+    bank_ifsc: company?.bank_ifsc || "",
+    bank_branch: company?.bank_branch || "",
     upi_id: company?.upi_id || "",
     upi_name: company?.upi_name || "",
+    terms_and_conditions: company?.terms_and_conditions || "",
   };
 }
 
@@ -35,6 +45,18 @@ function formatStorageUsed(bytes) {
   const value = Number(bytes) || 0;
   if (value < 1024) return `${value} B`;
   return `${(value / 1024).toFixed(1)} KB`;
+}
+
+function extractApiErrorMessage(error, fallbackMessage) {
+  const details = error?.response?.data?.details;
+  if (details && typeof details === "object") {
+    const firstDetail = Object.values(details)[0];
+    if (firstDetail?.msg) {
+      return firstDetail.msg;
+    }
+  }
+
+  return error?.response?.data?.error || fallbackMessage;
 }
 
 export default function Profile() {
@@ -59,16 +81,27 @@ export default function Profile() {
     phone: "",
     email: "",
     gstin: "",
+    country: "India",
+    state_code: "",
+    state_name: "",
     pan: "",
     website: "",
+    bank_name: "",
+    bank_account_number: "",
+    bank_ifsc: "",
+    bank_branch: "",
     upi_id: "",
     upi_name: "",
+    terms_and_conditions: "",
   });
   const [logo, setLogo] = useState(null);
   const [upiQrFile, setUpiQrFile] = useState(null);
+  const [signatureFile, setSignatureFile] = useState(null);
   const [savingCompany, setSavingCompany] = useState(false);
   const [uploadingUpiQr, setUploadingUpiQr] = useState(false);
   const [removingUpiQr, setRemovingUpiQr] = useState(false);
+  const [uploadingSignature, setUploadingSignature] = useState(false);
+  const [removingSignature, setRemovingSignature] = useState(false);
 
   const [passForm, setPassForm] = useState({
     current_password: "",
@@ -76,6 +109,9 @@ export default function Profile() {
     confirm_password: "",
   });
   const [savingPass, setSavingPass] = useState(false);
+  const [showCurrentPass, setShowCurrentPass] = useState(false);
+  const [showNewPass, setShowNewPass] = useState(false);
+  const [showConfirmPass, setShowConfirmPass] = useState(false);
 
   const [activities, setActivities] = useState([]);
   const [actPage, setActPage] = useState(1);
@@ -115,7 +151,7 @@ export default function Profile() {
       setProfilePic(null);
       toast.success("Profile updated");
     } catch (error) {
-      toast.error(error.response?.data?.error || "Failed to update profile");
+      toast.error(extractApiErrorMessage(error, "Failed to update profile"));
     } finally {
       setSavingProfile(false);
     }
@@ -139,10 +175,52 @@ export default function Profile() {
       setLogo(null);
       toast.success("Company profile updated");
     } catch (error) {
-      toast.error(error.response?.data?.error || "Failed to update company profile");
+      toast.error(extractApiErrorMessage(error, "Failed to update company profile"));
     } finally {
       setSavingCompany(false);
     }
+  };
+
+  const handleCompanyCountryChange = (value) => {
+    if (isIndianCountry(value)) {
+      setCompanyForm((current) => ({
+        ...current,
+        country: "India",
+        state_name: current.gstin ? current.state_name : "",
+        state_code: current.gstin ? current.state_code : "",
+      }));
+      return;
+    }
+
+    setCompanyForm((current) => ({
+      ...current,
+      country: value,
+      gstin: "",
+      state_name: "",
+      state_code: "",
+    }));
+  };
+
+  const handleCompanyStateChange = (stateCode) => {
+    const state = INDIAN_STATES.find((item) => item.code === stateCode);
+    setCompanyForm((current) => ({
+      ...current,
+      state_code: state?.code || "",
+      state_name: state?.name || "",
+    }));
+  };
+
+  const handleCompanyGstinChange = (value) => {
+    const nextValue = value.toUpperCase();
+    const state = deriveStateFromGstin(nextValue);
+
+    setCompanyForm((current) => ({
+      ...current,
+      gstin: nextValue,
+      ...(state && isIndianCountry(current.country)
+        ? { state_code: state.code, state_name: state.name }
+        : {}),
+    }));
   };
 
   const handleUploadUpiQr = async () => {
@@ -181,6 +259,42 @@ export default function Profile() {
     }
   };
 
+  const handleUploadSignature = async () => {
+    if (!signatureFile) {
+      toast.error("Choose an authorised signature image first");
+      return;
+    }
+
+    setUploadingSignature(true);
+    try {
+      const formData = new FormData();
+      formData.append("authorized_signature", signatureFile);
+      const res = await api.post("/profile/company/signature", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      updateCompany(res.data.data || {});
+      setSignatureFile(null);
+      toast.success("Authorised signature uploaded");
+    } catch (error) {
+      toast.error(extractApiErrorMessage(error, "Failed to upload authorised signature"));
+    } finally {
+      setUploadingSignature(false);
+    }
+  };
+
+  const handleRemoveSignature = async () => {
+    setRemovingSignature(true);
+    try {
+      const res = await api.delete("/profile/company/signature");
+      updateCompany(res.data.data || {});
+      toast.success("Authorised signature removed");
+    } catch (error) {
+      toast.error(extractApiErrorMessage(error, "Failed to remove authorised signature"));
+    } finally {
+      setRemovingSignature(false);
+    }
+  };
+
   const handleChangePassword = async (event) => {
     event.preventDefault();
     if (passForm.new_password !== passForm.confirm_password) {
@@ -207,7 +321,7 @@ export default function Profile() {
       setActivities(res.data.data || []);
       setActTotal(res.data.total || 0);
     } catch {
-      
+
     } finally {
       setLoadingAct(false);
     }
@@ -299,7 +413,7 @@ export default function Profile() {
                         <div className="text-muted" style={{ fontSize: "0.75rem" }}>
                           {user?.must_change_password
                             ? "You must replace your temporary password before using the workspace normally."
-                            : `Password set on ${new Date(user.email_verified_at || user.created_at).toLocaleDateString()}`}
+                            : `Password set on ${formatIndiaDate(user.email_verified_at || user.created_at)}`}
                         </div>
                       </div>
                     </div>
@@ -336,144 +450,300 @@ export default function Profile() {
           <div className="card-body">
             <form onSubmit={handleSaveCompany}>
               <fieldset disabled={!canEditCompany} className="border-0 p-0 m-0">
-              <div className="row g-3">
-                <div className="col-12 col-md-6">
-                  <label className="form-label small fw-medium">Company Name *</label>
-                  <input
-                    className="form-control form-control-sm"
-                    value={companyForm.name}
-                    onChange={(event) => setCompanyForm({ ...companyForm, name: event.target.value })}
-                    required
-                  />
-                </div>
-                <div className="col-12 col-md-6">
-                  <label className="form-label small fw-medium">Logo</label>
-                  <input
-                    type="file"
-                    className="form-control form-control-sm"
-                    accept="image/*"
-                    onChange={(event) => setLogo(event.target.files?.[0] || null)}
-                  />
-                </div>
-                <div className="col-12">
-                  <label className="form-label small fw-medium">Address</label>
-                  <textarea
-                    className="form-control form-control-sm"
-                    rows={2}
-                    value={companyForm.address}
-                    onChange={(event) => setCompanyForm({ ...companyForm, address: event.target.value })}
-                  />
-                </div>
-                <div className="col-6 col-md-4">
-                  <label className="form-label small fw-medium">Phone</label>
-                  <PhoneInput
-                    className="input-group-sm"
-                    value={companyForm.phone}
-                    onChange={(event) => setCompanyForm({ ...companyForm, phone: event.target.value })}
-                  />
-                </div>
-                <div className="col-6 col-md-4">
-                  <label className="form-label small fw-medium">Email</label>
-                  <input
-                    type="email"
-                    className="form-control form-control-sm"
-                    value={companyForm.email}
-                    onChange={(event) => setCompanyForm({ ...companyForm, email: event.target.value })}
-                  />
-                </div>
-                <div className="col-6 col-md-4">
-                  <label className="form-label small fw-medium">Website</label>
-                  <input
-                    className="form-control form-control-sm"
-                    value={companyForm.website}
-                    onChange={(event) => setCompanyForm({ ...companyForm, website: event.target.value })}
-                  />
-                </div>
-                <div className="col-6 col-md-4">
-                  <label className="form-label small fw-medium">GSTIN</label>
-                  <input
-                    className="form-control form-control-sm"
-                    value={companyForm.gstin}
-                    onChange={(event) => setCompanyForm({ ...companyForm, gstin: event.target.value })}
-                  />
-                </div>
-                <div className="col-6 col-md-4">
-                  <label className="form-label small fw-medium">PAN</label>
-                  <input
-                    className="form-control form-control-sm"
-                    value={companyForm.pan}
-                    onChange={(event) => setCompanyForm({ ...companyForm, pan: event.target.value })}
-                  />
-                </div>
-                <div className="col-12">
-                  <hr className="my-1" />
-                  <small className="text-muted fw-bold">UPI Payment Settings (for Invoice QR)</small>
-                </div>
-                <div className="col-6">
-                  <label className="form-label small fw-medium">UPI ID</label>
-                  <input
-                    className="form-control form-control-sm"
-                    value={companyForm.upi_id}
-                    onChange={(event) => setCompanyForm({ ...companyForm, upi_id: event.target.value })}
-                    placeholder="yourname@upi"
-                  />
-                </div>
-                <div className="col-6">
-                  <label className="form-label small fw-medium">UPI Display Name</label>
-                  <input
-                    className="form-control form-control-sm"
-                    value={companyForm.upi_name}
-                    onChange={(event) => setCompanyForm({ ...companyForm, upi_name: event.target.value })}
-                  />
-                </div>
-                <div className="col-12 col-md-6">
-                  <label className="form-label small fw-medium">Upload UPI QR Image</label>
-                  <input
-                    type="file"
-                    className="form-control form-control-sm"
-                    accept="image/*"
-                    onChange={(event) => setUpiQrFile(event.target.files?.[0] || null)}
-                  />
-                  <div className="d-flex flex-wrap gap-2 mt-2">
-                    <button
-                      type="button"
-                      className="btn btn-outline-primary btn-sm"
-                      onClick={handleUploadUpiQr}
-                      disabled={!upiQrFile || uploadingUpiQr}
-                    >
-                      {uploadingUpiQr ? "Uploading..." : "Upload UPI QR"}
-                    </button>
-                    {company?.upi_qr_image && (
+                <div className="row g-3">
+                  <div className="col-12 col-md-6">
+                    <label className="form-label small fw-medium">Company Name *</label>
+                    <input
+                      className="form-control form-control-sm"
+                      value={companyForm.name}
+                      onChange={(event) => setCompanyForm({ ...companyForm, name: event.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="col-12 col-md-6">
+                    <label className="form-label small fw-medium">Logo</label>
+                    <input
+                      type="file"
+                      className="form-control form-control-sm"
+                      accept="image/*"
+                      onChange={(event) => setLogo(event.target.files?.[0] || null)}
+                    />
+                  </div>
+                  <div className="col-12">
+                    <label className="form-label small fw-medium">Billing Address</label>
+                    <textarea
+                      className="form-control form-control-sm"
+                      rows={2}
+                      value={companyForm.address}
+                      onChange={(event) => setCompanyForm({ ...companyForm, address: event.target.value })}
+                    />
+                  </div>
+                  <div className="col-6 col-md-4">
+                    <label className="form-label small fw-medium">Phone</label>
+                    <PhoneInput
+                      className="input-group-sm"
+                      value={companyForm.phone}
+                      onChange={(event) => setCompanyForm({ ...companyForm, phone: event.target.value })}
+                    />
+                  </div>
+                  <div className="col-6 col-md-4">
+                    <label className="form-label small fw-medium">Email</label>
+                    <input
+                      type="email"
+                      className="form-control form-control-sm"
+                      value={companyForm.email}
+                      onChange={(event) => setCompanyForm({ ...companyForm, email: event.target.value })}
+                    />
+                  </div>
+                  <div className="col-6 col-md-4">
+                    <label className="form-label small fw-medium">Country *</label>
+                    <input
+                      className="form-control form-control-sm"
+                      value={companyForm.country}
+                      onChange={(event) => handleCompanyCountryChange(event.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="col-6 col-md-4">
+                    <label className="form-label small fw-medium">Website</label>
+                    <input
+                      className="form-control form-control-sm"
+                      value={companyForm.website}
+                      onChange={(event) => setCompanyForm({ ...companyForm, website: event.target.value })}
+                    />
+                  </div>
+                  <div className="col-6 col-md-4">
+                    <label className="form-label small fw-medium">GSTIN</label>
+                    <input
+                      className="form-control form-control-sm"
+                      value={companyForm.gstin}
+                      onChange={(event) => handleCompanyGstinChange(event.target.value)}
+                      disabled={!isIndianCountry(companyForm.country)}
+                    />
+                  </div>
+                  {isIndianCountry(companyForm.country) ? (
+                    <>
+                      <div className="col-6 col-md-4">
+                        <label className="form-label small fw-medium">State *</label>
+                        <select
+                          className="form-select form-select-sm"
+                          value={companyForm.state_code}
+                          onChange={(event) => handleCompanyStateChange(event.target.value)}
+                          required
+                        >
+                          <option value="">Select state</option>
+                          {INDIAN_STATES.filter((state) => Number(state.code) <= 38).map((state) => (
+                            <option key={state.code} value={state.code}>{state.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="col-6 col-md-4">
+                        <label className="form-label small fw-medium">State Code</label>
+                        <input
+                          className="form-control form-control-sm"
+                          value={companyForm.state_code}
+                          readOnly
+                          placeholder="Selected state code"
+                        />
+                      </div>
+                      <div className="col-12 col-md-4">
+                        <label className="form-label small fw-medium">State Name</label>
+                        <input
+                          className="form-control form-control-sm"
+                          value={companyForm.state_name}
+                          readOnly
+                          placeholder="Selected state"
+                        />
+                        <div className="small text-muted mt-1">If GSTIN is entered, the selected state must match the GSTIN state code.</div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="col-12 col-md-8">
+                      <label className="form-label small fw-medium">State / Region *</label>
+                      <input
+                        className="form-control form-control-sm"
+                        value={companyForm.state_name}
+                        onChange={(event) => setCompanyForm({ ...companyForm, state_name: event.target.value, state_code: "" })}
+                        required
+                      />
+                    </div>
+                  )}
+                  <div className="col-6 col-md-4">
+                    <label className="form-label small fw-medium">PAN</label>
+                    <input
+                      className="form-control form-control-sm"
+                      value={companyForm.pan}
+                      onChange={(event) => setCompanyForm({ ...companyForm, pan: event.target.value })}
+                    />
+                  </div>
+                  <div className="col-12">
+                    <hr className="my-1" />
+                    <small className="text-muted fw-bold">Bank Details (for GST Invoice Export)</small>
+                  </div>
+                  <div className="col-12 col-md-6">
+                    <label className="form-label small fw-medium">Bank Name</label>
+                    <input
+                      className="form-control form-control-sm"
+                      value={companyForm.bank_name}
+                      onChange={(event) => setCompanyForm({ ...companyForm, bank_name: event.target.value })}
+                    />
+                  </div>
+                  <div className="col-12 col-md-6">
+                    <label className="form-label small fw-medium">Account Number</label>
+                    <input
+                      className="form-control form-control-sm"
+                      value={companyForm.bank_account_number}
+                      onChange={(event) => setCompanyForm({ ...companyForm, bank_account_number: event.target.value })}
+                    />
+                  </div>
+                  <div className="col-12 col-md-6">
+                    <label className="form-label small fw-medium">IFSC Code</label>
+                    <input
+                      className="form-control form-control-sm"
+                      value={companyForm.bank_ifsc}
+                      onChange={(event) => setCompanyForm({ ...companyForm, bank_ifsc: event.target.value })}
+                    />
+                  </div>
+                  <div className="col-12 col-md-6">
+                    <label className="form-label small fw-medium">Branch</label>
+                    <input
+                      className="form-control form-control-sm"
+                      value={companyForm.bank_branch}
+                      onChange={(event) => setCompanyForm({ ...companyForm, bank_branch: event.target.value })}
+                    />
+                  </div>
+                  <div className="col-12">
+                    <hr className="my-1" />
+                    <small className="text-muted fw-bold">UPI Payment Settings (for Invoice QR)</small>
+                  </div>
+                  <div className="col-6">
+                    <label className="form-label small fw-medium">UPI ID</label>
+                    <input
+                      className="form-control form-control-sm"
+                      value={companyForm.upi_id}
+                      onChange={(event) => setCompanyForm({ ...companyForm, upi_id: event.target.value })}
+                      placeholder="yourname@upi"
+                    />
+                  </div>
+                  <div className="col-6">
+                    <label className="form-label small fw-medium">UPI Display Name</label>
+                    <input
+                      className="form-control form-control-sm"
+                      value={companyForm.upi_name}
+                      onChange={(event) => setCompanyForm({ ...companyForm, upi_name: event.target.value })}
+                    />
+                  </div>
+                  <div className="col-12 col-md-6">
+                    <label className="form-label small fw-medium">Upload UPI QR Image</label>
+                    <input
+                      type="file"
+                      className="form-control form-control-sm"
+                      accept="image/*"
+                      onChange={(event) => setUpiQrFile(event.target.files?.[0] || null)}
+                    />
+                    <div className="d-flex flex-wrap gap-2 mt-2">
                       <button
                         type="button"
-                        className="btn btn-outline-danger btn-sm"
-                        onClick={handleRemoveUpiQr}
-                        disabled={removingUpiQr}
+                        className="btn btn-outline-primary btn-sm"
+                        onClick={handleUploadUpiQr}
+                        disabled={!upiQrFile || uploadingUpiQr}
                       >
-                        {removingUpiQr ? "Removing..." : "Remove"}
+                        {uploadingUpiQr ? "Uploading..." : "Upload UPI QR"}
                       </button>
-                    )}
+                      {company?.upi_qr_image && (
+                        <button
+                          type="button"
+                          className="btn btn-outline-danger btn-sm"
+                          onClick={handleRemoveUpiQr}
+                          disabled={removingUpiQr}
+                        >
+                          {removingUpiQr ? "Removing..." : "Remove"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="col-12 col-md-6">
+                    <label className="form-label small fw-medium">Current QR Preview</label>
+                    <div className="profile-qr-preview">
+                      {company?.upi_qr_image ? (
+                        <AuthImage
+                          src={company.upi_qr_image}
+                          alt="UPI QR"
+                          className="img-fluid rounded"
+                          style={{ maxHeight: 200 }}
+                        />
+                      ) : (
+                        <span className="text-muted small">No UPI QR uploaded yet</span>
+                      )}
+                    </div>
+                    <div className="small text-muted mt-2">
+                      Storage used: {formatStorageUsed(company?.storage_used_bytes)}
+                    </div>
+                  </div>
+                  <div className="col-12">
+                    <hr className="my-1" />
+                    <small className="text-muted fw-bold">Authorised Signature (for Invoice, Bill, and GST Document)</small>
+                  </div>
+                  <div className="col-12 col-md-6">
+                    <label className="form-label small fw-medium">Upload Signature Image</label>
+                    <input
+                      type="file"
+                      className="form-control form-control-sm"
+                      accept="image/*"
+                      onChange={(event) => setSignatureFile(event.target.files?.[0] || null)}
+                    />
+                    <div className="d-flex flex-wrap gap-2 mt-2">
+                      <button
+                        type="button"
+                        className="btn btn-outline-primary btn-sm"
+                        onClick={handleUploadSignature}
+                        disabled={!signatureFile || uploadingSignature}
+                      >
+                        {uploadingSignature ? "Uploading..." : "Upload Signature"}
+                      </button>
+                      {company?.authorized_signature && (
+                        <button
+                          type="button"
+                          className="btn btn-outline-danger btn-sm"
+                          onClick={handleRemoveSignature}
+                          disabled={removingSignature}
+                        >
+                          {removingSignature ? "Removing..." : "Remove"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="col-12 col-md-6">
+                    <label className="form-label small fw-medium">Current Signature Preview</label>
+                    <div className="profile-qr-preview">
+                      {company?.authorized_signature ? (
+                        <AuthImage
+                          src={company.authorized_signature}
+                          alt="Authorised Signature"
+                          className="img-fluid rounded"
+                          style={{ maxHeight: 120 }}
+                        />
+                      ) : (
+                        <span className="text-muted small">No authorised signature uploaded yet</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="col-12">
+                    <hr className="my-1" />
+                    <small className="text-muted fw-bold">Terms &amp; Conditions (for Invoice, GST Document &amp; Bill)</small>
+                  </div>
+                  <div className="col-12">
+                    <label className="form-label small fw-medium">Terms &amp; Conditions</label>
+                    <textarea
+                      className="form-control form-control-sm"
+                      rows={4}
+                      placeholder="Enter each term on a new line. These will appear on invoices, GST documents, and bills."
+                      value={companyForm.terms_and_conditions}
+                      onChange={(event) => setCompanyForm({ ...companyForm, terms_and_conditions: event.target.value })}
+                    />
+                    <div className="small text-muted mt-1">Each line will be treated as a separate term. Leave blank to use default terms.</div>
                   </div>
                 </div>
-                <div className="col-12 col-md-6">
-                  <label className="form-label small fw-medium">Current QR Preview</label>
-                  <div className="profile-qr-preview">
-                    {company?.upi_qr_image ? (
-                      <AuthImage
-                        src={company.upi_qr_image}
-                        alt="UPI QR"
-                        className="img-fluid rounded"
-                        style={{ maxHeight: 200 }}
-                      />
-                    ) : (
-                      <span className="text-muted small">No UPI QR uploaded yet</span>
-                    )}
-                  </div>
-                  <div className="small text-muted mt-2">
-                    Storage used: {formatStorageUsed(company?.storage_used_bytes)}
-                  </div>
-                </div>
-              </div>
               </fieldset>
               <button type="submit" className="btn btn-primary btn-sm mt-3" disabled={!canEditCompany || savingCompany}>
                 {savingCompany ? "Saving..." : "Save Company"}
@@ -489,34 +759,61 @@ export default function Profile() {
             <form onSubmit={handleChangePassword}>
               <div className="mb-3">
                 <label className="form-label small fw-medium">Current Password</label>
-                <input
-                  type="password"
-                  className="form-control form-control-sm"
-                  value={passForm.current_password}
-                  onChange={(event) => setPassForm({ ...passForm, current_password: event.target.value })}
-                  required
-                />
+                <div className="input-group input-group-sm">
+                  <input
+                    type={showCurrentPass ? "text" : "password"}
+                    className="form-control"
+                    value={passForm.current_password}
+                    onChange={(event) => setPassForm({ ...passForm, current_password: event.target.value })}
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-outline-secondary"
+                    onClick={() => setShowCurrentPass(!showCurrentPass)}
+                  >
+                    <i className={`fa-regular fa-eye${showCurrentPass ? "-slash" : ""}`}></i>
+                  </button>
+                </div>
               </div>
               <div className="mb-3">
                 <label className="form-label small fw-medium">New Password</label>
-                <input
-                  type="password"
-                  className="form-control form-control-sm"
-                  value={passForm.new_password}
-                  onChange={(event) => setPassForm({ ...passForm, new_password: event.target.value })}
-                  required
-                  minLength={6}
-                />
+                <div className="input-group input-group-sm">
+                  <input
+                    type={showNewPass ? "text" : "password"}
+                    className="form-control"
+                    value={passForm.new_password}
+                    onChange={(event) => setPassForm({ ...passForm, new_password: event.target.value })}
+                    required
+                    minLength={6}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-outline-secondary"
+                    onClick={() => setShowNewPass(!showNewPass)}
+                  >
+                    <i className={`fa-regular fa-eye${showNewPass ? "-slash" : ""}`}></i>
+                  </button>
+                </div>
               </div>
               <div className="mb-3">
                 <label className="form-label small fw-medium">Confirm New Password</label>
-                <input
-                  type="password"
-                  className="form-control form-control-sm"
-                  value={passForm.confirm_password}
-                  onChange={(event) => setPassForm({ ...passForm, confirm_password: event.target.value })}
-                  required
-                />
+                <div className="input-group input-group-sm">
+                  <input
+                    type={showConfirmPass ? "text" : "password"}
+                    className="form-control"
+                    value={passForm.confirm_password}
+                    onChange={(event) => setPassForm({ ...passForm, confirm_password: event.target.value })}
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-outline-secondary"
+                    onClick={() => setShowConfirmPass(!showConfirmPass)}
+                  >
+                    <i className={`fa-regular fa-eye${showConfirmPass ? "-slash" : ""}`}></i>
+                  </button>
+                </div>
               </div>
               <button type="submit" className="btn btn-primary btn-sm" disabled={savingPass}>
                 {savingPass ? "Changing..." : "Change Password"}
@@ -545,12 +842,7 @@ export default function Profile() {
                         <span className="small">{activity.description}</span>
                       </div>
                       <small className="text-muted text-nowrap">
-                        {new Date((activity.created_at || "").replace(" ", "T")).toLocaleString("en-IN", {
-                          day: "2-digit",
-                          month: "short",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
+                        {formatIndiaDateTime(activity.created_at, { year: undefined })}
                       </small>
                     </div>
                   </div>

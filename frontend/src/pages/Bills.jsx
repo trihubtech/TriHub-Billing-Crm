@@ -7,6 +7,7 @@ import ConfirmModal from "../components/shared/ConfirmModal";
 import api from "../utils/api";
 import { useAuth } from "../context/AuthContext";
 import { hasPermission } from "../utils/permissions";
+import { formatIndiaDate } from "../utils/time";
 
 function formatCurrency(value) {
   return new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value || 0);
@@ -70,7 +71,7 @@ export default function Bills() {
   const columns = [
     { key: "code", label: "Bill #", style: { width: "90px" }, render: (row) => <span className="fw-semibold text-primary">{row.code}</span> },
     { key: "vendor_invoice_number", label: "Vendor Inv#", style: { width: "120px" }, render: (row) => <small>{row.vendor_invoice_number}</small> },
-    { key: "date", label: "Date", style: { width: "100px" }, render: (row) => new Date(String(row.date).replace(" ", "T")).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) },
+    { key: "date", label: "Date", style: { width: "100px" }, render: (row) => formatIndiaDate(row.date) },
     { key: "vendor_name", label: "Vendor", render: (row) => <div className="fw-medium">{row.vendor_name}</div> },
     { key: "grand_total", label: "Total", style: { width: "120px" }, cellClassName: "text-end fw-semibold", render: (row) => `₹${formatCurrency(row.grand_total)}` },
     {
@@ -81,8 +82,8 @@ export default function Bills() {
       render: (row) => {
         const balance = Number(row.balance || 0);
         if (balance === 0) return <span className="text-muted">₹0.00</span>;
-        if (balance < 0) return <span className="text-danger">Due: ₹{formatCurrency(Math.abs(balance))}</span>;
-        return <span className="text-success">Adv: ₹{formatCurrency(balance)}</span>;
+        if (balance < 0) return <span className="text-danger">Payable: ₹{formatCurrency(Math.abs(balance))}</span>;
+        return <span className="text-success">Credit: ₹{formatCurrency(balance)}</span>;
       },
     },
     { key: "status", label: "Status", style: { width: "90px" }, render: (row) => <span className={`badge bg-${statusColors[row.status]} bg-opacity-10 text-${statusColors[row.status]}`} style={{ fontSize: "0.7rem" }}>{row.status}</span> },

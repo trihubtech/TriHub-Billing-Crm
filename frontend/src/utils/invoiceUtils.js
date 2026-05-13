@@ -105,14 +105,11 @@ export function formatCurrency(n) {
 }
 
 export function formatDate(str) {
-  if (!str) return "";
-  return new Date(str).toLocaleDateString("en-IN", {
-    day: "2-digit", month: "short", year: "numeric",
-  });
+  return formatIndiaDate(str);
 }
 
 export function todayISO() {
-  return new Date().toISOString().split("T")[0];
+  return todayIndiaISO();
 }
 
 
@@ -138,3 +135,4 @@ export function buildUpiUri({ upiId, payeeName, amount, invoiceNumber }) {
 
   return `upi://pay?${params.toString()}`;
 }
+import { formatIndiaDate, todayIndiaISO } from "./time";

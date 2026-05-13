@@ -4,6 +4,8 @@ import { toast } from "react-toastify";
 import PageHeader from "../components/shared/PageHeader";
 import { useAuth } from "../context/AuthContext";
 import { hasPermission } from "../utils/permissions";
+import GstInvoiceDocument from "../components/Reports/GstInvoiceDocument";
+import { formatIndiaDate, todayIndiaISO } from "../utils/time";
 
 function formatCurrency(n) {
   return new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
@@ -13,10 +15,13 @@ export default function Reports() {
   const { user } = useAuth();
   const [reports, setReports] = useState([]);
   const [selectedReport, setSelectedReport] = useState(null);
-  const [from, setFrom] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split("T")[0]; });
-  const [to, setTo] = useState(() => new Date().toISOString().split("T")[0]);
+  const [from, setFrom] = useState(() => `${todayIndiaISO().slice(0, 8)}01`);
+  const [to, setTo] = useState(() => todayIndiaISO());
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [selectedInvoiceId, setSelectedInvoiceId] = useState("");
+  const [invoiceDocument, setInvoiceDocument] = useState(null);
+  const [loadingInvoiceDocument, setLoadingInvoiceDocument] = useState(false);
   const printRef = useRef(null);
   const canViewReports = hasPermission(user, "can_view_reports");
 
@@ -38,6 +43,12 @@ export default function Reports() {
     }
     setLoading(true);
     setSelectedReport(reportId);
+    if (reportId === "gst_invoice_document") {
+      setInvoiceDocument(null);
+    } else {
+      setSelectedInvoiceId("");
+      setInvoiceDocument(null);
+    }
     try {
       const res = await api.get(`/reports/${reportId}?from=${from}&to=${to}`);
       setData(res.data);
@@ -50,7 +61,73 @@ export default function Reports() {
     
   }, [from, to, canViewReports]);
 
+  const fetchInvoiceDocument = async (invoiceId) => {
+    if (!invoiceId) {
+      setInvoiceDocument(null);
+      return;
+    }
+
+    setLoadingInvoiceDocument(true);
+    try {
+      const res = await api.get(`/reports/gst-invoice-document/invoices/${invoiceId}`);
+      setInvoiceDocument(res.data.data || null);
+    } catch {
+      toast.error("Failed to load GST invoice document");
+      setInvoiceDocument(null);
+    } finally {
+      setLoadingInvoiceDocument(false);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedReport !== "gst_invoice_document") return;
+    const invoiceRows = data?.data?.rows || [];
+    const hasSelectedInvoice = invoiceRows.some((row) => String(row.id) === String(selectedInvoiceId));
+    const preferredId = (hasSelectedInvoice ? selectedInvoiceId : "") || data?.data?.selected_invoice_id || invoiceRows[0]?.id || "";
+
+    if (!preferredId) {
+      setSelectedInvoiceId("");
+      setInvoiceDocument(null);
+      return;
+    }
+
+    if (String(preferredId) !== String(selectedInvoiceId)) {
+      setSelectedInvoiceId(String(preferredId));
+      return;
+    }
+
+    fetchInvoiceDocument(preferredId);
+  }, [selectedReport, data, selectedInvoiceId]);
+
   const handlePrint = () => window.print();
+
+  const handleInvoiceSelect = (invoiceId) => {
+    setSelectedInvoiceId(invoiceId);
+  };
+
+  const handleDownloadExcel = async () => {
+    if (!selectedInvoiceId) {
+      toast.error("Choose an invoice first");
+      return;
+    }
+
+    try {
+      const response = await api.get(`/reports/gst-invoice-document/invoices/${selectedInvoiceId}/excel`, {
+        responseType: "blob",
+      });
+      const blob = new Blob([response.data], { type: "application/vnd.ms-excel" });
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `${invoiceDocument?.invoice?.number || invoiceDocument?.invoice?.code || "gst-invoice"}.xls`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      toast.error("Failed to download GST invoice Excel");
+    }
+  };
 
   const grouped = reports.reduce((acc, r) => {
     (acc[r.category] = acc[r.category] || []).push(r);
@@ -157,12 +234,12 @@ export default function Reports() {
             <div className="card border-0 shadow-sm rounded-4 overflow-hidden" ref={printRef} id="report-print-card">
 
               {}
-              <div className="d-none d-print-block px-4 pt-4 pb-2 border-bottom">
+              {selectedReport !== "gst_invoice_document" && (<div className="d-none d-print-block px-4 pt-4 pb-2 border-bottom">
                 <h4 className="mb-1 fw-bold">{reportName}</h4>
                 <p className="text-muted mb-0 small">
-                  {new Date(from).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })} — {new Date(to).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                  {formatIndiaDate(from, { day: "numeric" })} - {formatIndiaDate(to, { day: "numeric" })}
                 </p>
-              </div>
+              </div>)}
 
               {}
               <div className="card-header bg-white border-bottom p-4 d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 d-print-none">
@@ -170,15 +247,29 @@ export default function Reports() {
                   <h4 className="mb-1 fw-bold text-dark">{reportName}</h4>
                   <p className="text-muted mb-0 small">
                     <i className="fa-regular fa-calendar me-1"></i>
-                    {new Date(from).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })} to {new Date(to).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                    {formatIndiaDate(from, { day: "numeric" })} to {formatIndiaDate(to, { day: "numeric" })}
                   </p>
                 </div>
-                <button className="btn btn-primary shadow-sm rounded-pill px-4" onClick={handlePrint}>
-                  <i className="fa-solid fa-print me-2"></i>Print / Download PDF
-                </button>
+                {selectedReport !== "gst_invoice_document" && (
+                  <button className="btn btn-primary shadow-sm rounded-pill px-4" onClick={handlePrint}>
+                    <i className="fa-solid fa-print me-2"></i>Print / Download PDF
+                  </button>
+                )}
               </div>
 
               <div className="card-body p-0">
+                {selectedReport === "gst_invoice_document" ? (
+                  <GstInvoiceDocument
+                    invoices={data.data.rows || []}
+                    selectedInvoiceId={selectedInvoiceId}
+                    onSelectInvoice={handleInvoiceSelect}
+                    documentData={invoiceDocument}
+                    loadingDocument={loadingInvoiceDocument}
+                    onPrint={handlePrint}
+                    onDownloadExcel={handleDownloadExcel}
+                  />
+                ) : (
+                  <>
                 {}
                 {data.data.summary && (
                   <div className="p-4 bg-light border-bottom">
@@ -403,6 +494,8 @@ export default function Reports() {
                     </div>
                   </div>
                 ) : null}
+                  </>
+                )}
               </div>
             </div>
           )}

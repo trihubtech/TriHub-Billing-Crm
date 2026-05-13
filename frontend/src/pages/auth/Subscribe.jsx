@@ -6,6 +6,7 @@ import { useAuth } from "../../context/AuthContext";
 import api from "../../utils/api";
 import AuthImage from "../../components/shared/AuthImage";
 import { hasPermission } from "../../utils/permissions";
+import { formatIndiaDate, formatIndiaDateTime } from "../../utils/time";
 
 function formatPrice(amount) {
   return new Intl.NumberFormat("en-IN", {
@@ -15,8 +16,8 @@ function formatPrice(amount) {
   }).format(amount);
 }
 
-const FALLBACK_MONTHLY_PRICE = Number(import.meta.env.VITE_SUBSCRIPTION_MONTHLY_PRICE || 499);
-const FALLBACK_YEARLY_PRICE = Number(import.meta.env.VITE_SUBSCRIPTION_YEARLY_PRICE || 4999);
+const FALLBACK_MONTHLY_PRICE = Number(import.meta.env.VITE_SUBSCRIPTION_MONTHLY_PRICE || 699);
+const FALLBACK_YEARLY_PRICE = Number(import.meta.env.VITE_SUBSCRIPTION_YEARLY_PRICE || 6999);
 
 const PLAN_OPTIONS = [
   {
@@ -149,19 +150,11 @@ export default function Subscribe() {
   }, []);
 
   const trialEndDate = user?.trial_ends_at
-    ? new Date(user.trial_ends_at).toLocaleDateString("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      })
+    ? formatIndiaDate(user.trial_ends_at)
     : null;
 
   const subEndDate = user?.sub_ends_at
-    ? new Date(user.sub_ends_at).toLocaleDateString("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      })
+    ? formatIndiaDate(user.sub_ends_at)
     : null;
 
   const daysInfo = getSubscriptionDaysInfo(user?.sub_ends_at || user?.trial_ends_at);
@@ -169,13 +162,7 @@ export default function Subscribe() {
 
   const latestStatus = latestPaymentRequest?.status || "";
   const latestSubmittedAt = latestPaymentRequest?.created_at
-    ? new Date(latestPaymentRequest.created_at).toLocaleString("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
+    ? formatIndiaDateTime(latestPaymentRequest.created_at)
     : null;
 
   async function handleSubmitPayment(event) {
