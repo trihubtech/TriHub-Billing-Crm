@@ -21,7 +21,6 @@ import Vendors from "./pages/Vendors";
 import Invoices from "./pages/Invoices";
 import Bills from "./pages/Bills";
 import Reports from "./pages/Reports";
-import GstReports from "./pages/GstReports";
 import Profile from "./pages/Profile";
 import Team from "./pages/Team";
 import Chat from "./pages/Chat";
@@ -235,9 +234,6 @@ export default function App() {
               </Route>
               <Route element={<PermissionGuard permission="can_list_reports" />}>
                 <Route path="/reports" element={<Reports />} />
-              </Route>
-              <Route element={<PermissionGuard permission="can_view_reports" />}>
-                <Route path="/reports/gst" element={<GstReports />} />
               </Route>
               <Route path="/profile" element={<Profile />} />
               <Route path="/chat" element={<Chat />} />
