@@ -3,12 +3,16 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
-  base: "/billing/",
+  base: "/",
 
   plugins: [
     react(),
 
     VitePWA({
+      base: "/",
+
+      scope: "/",
+
       registerType: "autoUpdate",
 
       manifest: {
@@ -20,16 +24,19 @@ export default defineConfig({
 
         display: "standalone",
 
-        start_url: "/billing/",
+        start_url: "/",
+
+        scope: "/",
 
         icons: [
           {
-            src: "/billing/icon-192.png",
+            src: "/icon-192.png",
             sizes: "192x192",
             type: "image/png",
           },
+
           {
-            src: "/billing/icon-512.png",
+            src: "/icon-512.png",
             sizes: "512x512",
             type: "image/png",
           },
@@ -40,9 +47,12 @@ export default defineConfig({
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/.*\/api\/(customers|products|vendors)/,
+
             handler: "NetworkFirst",
+
             options: {
               cacheName: "api-cache",
+
               expiration: {
                 maxAgeSeconds: 60 * 60,
               },
