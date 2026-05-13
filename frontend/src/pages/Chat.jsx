@@ -4,6 +4,7 @@ import AuthImage from "../components/shared/AuthImage";
 import PageHeader from "../components/shared/PageHeader";
 import api from "../utils/api";
 import { useAuth } from "../context/AuthContext";
+import { formatIndiaTime } from "../utils/time";
 
 export default function Chat() {
   const { user } = useAuth();
@@ -112,7 +113,7 @@ export default function Chat() {
                       )}
                       <div style={{ wordBreak: "break-word", whiteSpace: "pre-wrap" }}>{msg.message}</div>
                       <div className={`small mt-1 text-end ${isMe ? 'text-white-50' : 'text-muted'}`} style={{ fontSize: "0.65rem" }}>
-                        {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {formatIndiaTime(msg.created_at)}
                       </div>
                     </div>
                   </div>

@@ -5,16 +5,10 @@ import { toast } from "react-toastify";
 import PageHeader from "../../components/shared/PageHeader";
 import PhoneInput from "../../components/shared/PhoneInput";
 import api from "../../utils/api";
+import { formatIndiaDateTime } from "../../utils/time";
 
 function formatDateTime(value) {
-  if (!value) return "-";
-  return new Date(String(value).replace(" ", "T")).toLocaleString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return formatIndiaDateTime(value) || "-";
 }
 
 function formatStorage(bytes) {

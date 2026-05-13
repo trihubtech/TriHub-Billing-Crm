@@ -38,8 +38,10 @@ const NAV_ITEMS = [
   {
     label: "Reports",
     icon: "fa-solid fa-chart-pie",
-    path: "/reports",
-    permission: "can_list_reports",
+    children: [
+      { label: "All Reports", icon: "fa-solid fa-folder-open", path: "/reports", permission: "can_list_reports" },
+      { label: "GST Reports", icon: "fa-solid fa-receipt", path: "/reports/gst", permission: "can_view_reports" },
+    ],
   },
   {
     label: "Team Chat",
@@ -106,6 +108,7 @@ function SidebarGroup({ item, collapsed, onNavigate, onExpandDesktop }) {
         {!collapsed && (
           <>
             <span>{item.label}</span>
+            <i className={`fa-solid fa-chevron-down sidebar-arrow ms-auto ${open ? "open" : ""}`}></i>
           </>
         )}
       </button>

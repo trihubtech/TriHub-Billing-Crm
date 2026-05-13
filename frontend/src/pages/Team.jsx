@@ -4,6 +4,7 @@ import PageHeader from "../components/shared/PageHeader";
 import api from "../utils/api";
 import { useAuth } from "../context/AuthContext";
 import { hasPermission } from "../utils/permissions";
+import { formatIndiaDate } from "../utils/time";
 
 function roleBadge(role) {
   switch (role) {
@@ -180,7 +181,7 @@ function UserDetailRow({
                 )}
               </div>
               <div className="small text-muted mt-1">
-                Joined {new Date(member.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                Joined {formatIndiaDate(member.created_at)}
               </div>
             </div>
           </div>

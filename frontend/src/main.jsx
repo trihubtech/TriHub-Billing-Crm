@@ -18,7 +18,7 @@ const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
 const appTree = (
   <React.StrictMode>
-    <BrowserRouter>
+    <BrowserRouter basename="/billing">
       <AuthProvider>
         <App />
         <ToastContainer

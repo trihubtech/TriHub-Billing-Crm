@@ -7,6 +7,7 @@ import ConfirmModal from "../components/shared/ConfirmModal";
 import api from "../utils/api";
 import { useAuth } from "../context/AuthContext";
 import { hasPermission } from "../utils/permissions";
+import { formatIndiaDate } from "../utils/time";
 
 function formatCurrency(value) {
   return new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value || 0);
@@ -69,7 +70,7 @@ export default function Invoices() {
 
   const columns = [
     { key: "code", label: "Invoice #", style: { width: "100px" }, render: (row) => <span className="fw-semibold text-primary">{row.code}</span> },
-    { key: "date", label: "Date", style: { width: "100px" }, render: (row) => new Date(String(row.date).replace(" ", "T")).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) },
+    { key: "date", label: "Date", style: { width: "100px" }, render: (row) => formatIndiaDate(row.date) },
     { key: "customer_name", label: "Customer", render: (row) => <><div className="fw-medium">{row.customer_name}</div><small className="text-muted">{row.customer_mobile}</small></> },
     { key: "grand_total", label: "Total", style: { width: "120px" }, cellClassName: "text-end fw-semibold", render: (row) => `₹${formatCurrency(row.grand_total)}` },
     {

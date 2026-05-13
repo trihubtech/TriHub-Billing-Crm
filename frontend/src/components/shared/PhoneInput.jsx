@@ -199,13 +199,14 @@ const COUNTRY_CODES = [
 export default function PhoneInput({ value, onChange, required, className }) {
   const [countryCode, setCountryCode] = useState("+91");
   const [phoneNumber, setPhoneNumber] = useState("");
+  const maxDigits = 14;
 
   useEffect(() => {
     if (!value) {
       setPhoneNumber("");
       return;
     }
-    const match = value.match(/^(\+\d{1,4})\s?(\d{0,10})$/);
+    const match = value.match(/^(\+\d{1,4})\s?(\d{0,14})$/);
     if (match) {
       const exists = COUNTRY_CODES.find(c => c.code === match[1]);
       if (exists) {
@@ -215,10 +216,10 @@ export default function PhoneInput({ value, onChange, required, className }) {
     } else {
       const digitsOnly = value.replace(/\D/g, "");
       if (digitsOnly.length > 0) {
-        const last10 = digitsOnly.slice(-10);
-        setPhoneNumber(last10);
+        const normalizedNumber = digitsOnly.slice(-maxDigits);
+        setPhoneNumber(normalizedNumber);
         // Automatically fix the parent's invalid state by triggering an onChange
-        triggerChange(countryCode, last10);
+        triggerChange(countryCode, normalizedNumber);
       } else {
         // If it's complete garbage, clear the parent state to avoid validation errors
         if (value !== "") {
@@ -236,7 +237,7 @@ export default function PhoneInput({ value, onChange, required, className }) {
   };
 
   const handleNumberChange = (e) => {
-    const rawVal = e.target.value.replace(/\D/g, "").slice(0, 10);
+    const rawVal = e.target.value.replace(/\D/g, "").slice(0, maxDigits);
     setPhoneNumber(rawVal);
     triggerChange(countryCode, rawVal);
   };
@@ -268,8 +269,8 @@ export default function PhoneInput({ value, onChange, required, className }) {
       </select>
       <input
         type="tel"
-        pattern="\d{10}"
-        title="Must be exactly 10 digits"
+        pattern="\d{6,14}"
+        title="Use 6 to 14 digits"
         placeholder="9876543210"
         className="form-control"
         value={phoneNumber}

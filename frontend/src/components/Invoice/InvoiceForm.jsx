@@ -1,18 +1,45 @@
-
 import { useState, useEffect, useCallback, useRef } from "react";
 import Select from "react-select";
 import { useNavigate, useParams } from "react-router-dom";
-import {
-  calcItemTotals,
-  calcInvoiceTotals,
-  newItemDraft,
-  formatCurrency,
-  todayISO,
-} from "../../utils/invoiceUtils";
-import api from "../../utils/api";
 import { toast } from "react-toastify";
+import { useAuth } from "../../context/AuthContext";
 import PhoneInput from "../shared/PhoneInput";
+import BarcodeScanner from "../shared/BarcodeScanner";
+import api from "../../utils/api";
+import { formatCurrency, round2, todayISO } from "../../utils/invoiceUtils";
+import {
+  GST_RATE_OPTIONS,
+  INDIAN_STATES,
+  calculateInvoicePreview,
+  calcExclusiveRate,
+  createInvoiceItemDraft,
+  deriveStateFromGstin,
+  findStateByCode,
+  formatTaxRate,
+  isIndianCountry,
+} from "../../utils/gst";
 
+const PAYMENT_TERMS = [
+  { value: "CASH", label: "Cash" },
+  { value: "CARD", label: "Card" },
+  { value: "UPI", label: "UPI" },
+  { value: "CREDIT", label: "Credit" },
+];
+
+const SALUTATIONS = ["Mr.", "Mrs.", "Ms.", "M/s.", "Dr."];
+
+const EMPTY_CUSTOMER_FORM = {
+  salutation: "Mr.",
+  name: "",
+  mobile: "",
+  email: "",
+  gstin: "",
+  country: "India",
+  state_name: "",
+  state_code: "",
+  billing_address: "",
+  shipping_address: "",
+};
 
 const selectStyles = {
   control: (base, state) => ({
@@ -36,297 +63,483 @@ const selectStyles = {
   indicatorSeparator: () => ({ display: "none" }),
 };
 
-const PAYMENT_TERMS = [
-  { value: "CASH",   label: "Cash" },
-  { value: "CARD",   label: "Card" },
-  { value: "UPI",    label: "UPI" },
-  { value: "CREDIT", label: "Credit" },
-];
+function buildCustomerOption(customer) {
+  return {
+    value: customer.id,
+    label: `${customer.code || `CUST-${customer.id}`} - ${customer.salutation || ""} ${customer.name}`.trim(),
+    data: customer,
+  };
+}
 
+function buildProductOption(product) {
+  return {
+    value: product.id,
+    label: `${product.code} - ${product.name} (${product.unit})`,
+    data: product,
+  };
+}
+
+function resolveCompanyState(company) {
+  const derivedState = deriveStateFromGstin(company?.gstin);
+  return {
+    code: company?.state_code || derivedState?.code || "",
+    name: company?.state_name || derivedState?.name || "",
+  };
+}
 
 export default function InvoiceForm() {
-  const navigate    = useNavigate();
-  const { id }      = useParams();     
-  const isEdit      = Boolean(id);
-  const printRef    = useRef(null);
+  const navigate = useNavigate();
+  const { id } = useParams();
+  const isEdit = Boolean(id);
+  const { company: authCompany } = useAuth();
 
-  
-  const [invoiceCode,  setInvoiceCode]  = useState("");
-  const [date,         setDate]         = useState(todayISO());
-  const [term,         setTerm]         = useState({ value: "CASH", label: "Cash" });
-  const [customer,     setCustomer]     = useState(null);
-  const [discount,     setDiscount]     = useState("");
-  const [paidAmount,   setPaidAmount]   = useState("");
-  const [notes,        setNotes]        = useState("");
+  const quantityRefs = useRef({});
+  const scanProcessingRef = useRef(false);
 
-  
-  const [items, setItems] = useState([newItemDraft()]);
+  const [invoiceCode, setInvoiceCode] = useState("");
+  const [date, setDate] = useState(todayISO());
+  const [term, setTerm] = useState(PAYMENT_TERMS[0]);
+  const [customer, setCustomer] = useState(null);
+  const [placeOfSupplyStateCode, setPlaceOfSupplyStateCode] = useState("");
+  const [priceIncludesGst] = useState(true);
+  const [isExport, setIsExport] = useState(false);
+  const [discountType, setDiscountType] = useState("PERCENTAGE");
+  const [discountInput, setDiscountInput] = useState("");
+  const [paidAmount, setPaidAmount] = useState("");
+  const [notes, setNotes] = useState("");
+  const [items, setItems] = useState([createInvoiceItemDraft()]);
 
-  
-  const [totals, setTotals] = useState({
-    subTotal: 0, totalTax: 0, roundOff: 0, grandTotal: 0, amountInWords: "",
-  });
-
-  
   const [customerOptions, setCustomerOptions] = useState([]);
-  const [productOptions,  setProductOptions]  = useState([]);
-
-  
-  const [loading,    setLoading]    = useState(isEdit);
+  const [productOptions, setProductOptions] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [errors,     setErrors]     = useState({});
+  const [errors, setErrors] = useState({});
 
-  const SALUTATIONS = ["Mr.", "Mrs.", "Ms.", "M/s.", "Dr."];
-  const EMPTY_CUST_FORM = { salutation: "Mr.", name: "", mobile: "", address: "", email: "", gstin: "" };
   const [showAddCustomer, setShowAddCustomer] = useState(false);
-  const [custForm, setCustForm] = useState(EMPTY_CUST_FORM);
-  const [savingCust, setSavingCust] = useState(false);
+  const [customerEditMode, setCustomerEditMode] = useState(false);
+  const [customerForm, setCustomerForm] = useState(EMPTY_CUSTOMER_FORM);
+  const [savingCustomer, setSavingCustomer] = useState(false);
 
-  
-  const hasTax = items.some(i => (i.taxRate || 0) > 0);
+  const [showScanner, setShowScanner] = useState(false);
+  const [scanResult, setScanResult] = useState(null);
 
-  
-  
-  
-  useEffect(() => {
-    async function fetchOptions() {
-      try {
-        const [custRes, prodRes] = await Promise.all([
-          api.get("/customers?pageSize=500&active=1"),
-          api.get("/products?pageSize=500&active=1"),
-        ]);
+  const companyState = resolveCompanyState(authCompany);
+  const selectedCustomer = customer?.data || null;
+  const effectiveExport = Boolean(isExport) || (selectedCustomer && !isIndianCountry(selectedCustomer.country));
+  const rawSubTotal = items.reduce((sum, item) => {
+    const rate = round2(Number(item.rate) || 0);
+    const qty = round2(Number(item.quantity) || 0);
+    const taxRate = round2(Number(item.taxRate) || 0);
+    const exclusiveRate = calcExclusiveRate(rate, taxRate, priceIncludesGst);
+    return sum + round2(exclusiveRate * qty);
+  }, 0);
+  const discountAmount = discountType === "PERCENTAGE"
+    ? round2(rawSubTotal * (Number(discountInput) || 0) / 100)
+    : round2(Number(discountInput) || 0);
+  const preview = calculateInvoicePreview({
+    items,
+    discount: discountAmount,
+    companyStateCode: companyState.code,
+    placeOfSupplyStateCode,
+    isExport: effectiveExport,
+    priceIncludesGst,
+  });
+  const displayItems = preview.items;
+  const displayTotals = preview.totals;
+  const selectedPlaceOfSupply = findStateByCode(placeOfSupplyStateCode);
+  const customerBalance = Number(selectedCustomer?.balance || 0);
+  const projectedBalance = customer
+    ? customerBalance + (Number(paidAmount) || 0) - displayTotals.grandTotal
+    : 0;
 
-        setCustomerOptions(
-          custRes.data.data.map(c => ({
-            value: c.id,
-            label: `${c.code} — ${c.salutation} ${c.name}`,
-            data: c,
-          }))
-        );
+  const hasTax = displayTotals.totalTax > 0 || effectiveExport || displayItems.some((item) => Number(item.taxRate) > 0);
 
-        setProductOptions(
-          prodRes.data.data.map(p => ({
-            value: p.id,
-            label: `${p.code} — ${p.name} (${p.unit})`,
-            data: p,
-          }))
-        );
-      } catch {
-        toast.error("Failed to load data. Please refresh.");
-      }
-    }
-    fetchOptions();
+  const fetchOptions = useCallback(async () => {
+    const [customerRes, productRes] = await Promise.all([
+      api.get("/customers?pageSize=500&active=1"),
+      api.get("/products?pageSize=500&active=1"),
+    ]);
+
+    const nextCustomerOptions = customerRes.data.data.map(buildCustomerOption);
+    const nextProductOptions = productRes.data.data.map(buildProductOption);
+    setCustomerOptions(nextCustomerOptions);
+    setProductOptions(nextProductOptions);
+
+    return { nextCustomerOptions, nextProductOptions };
   }, []);
 
-  
-  
-  
   useEffect(() => {
-    if (!isEdit) return;
-
-    async function fetchInvoice() {
+    async function load() {
+      setLoading(true);
       try {
-        const res = await api.get(`/invoices/${id}`);
-        const inv = res.data.data;
+        const { nextCustomerOptions } = await fetchOptions();
 
-        setInvoiceCode(inv.code);
-        setDate(inv.date.split("T")[0]);
-        setTerm(PAYMENT_TERMS.find(t => t.value === inv.term) || PAYMENT_TERMS[0]);
-        setCustomer({ value: inv.customer_id, label: `${inv.customer_code} — ${inv.customer_salutation} ${inv.customer_name}`, data: { ...inv, balance: inv.previous_balance } });
-        setDiscount(inv.discount > 0 ? String(inv.discount) : "");
-        setPaidAmount(inv.paid_amount > 0 ? String(inv.paid_amount) : "");
-        setNotes(inv.notes || "");
+        if (isEdit) {
+          const res = await api.get(`/invoices/${id}`);
+          const invoice = res.data.data;
+          const customerData = {
+            id: invoice.customer_id,
+            code: invoice.customer_code,
+            salutation: invoice.customer_salutation,
+            name: invoice.customer_name,
+            mobile: invoice.customer_mobile,
+            email: invoice.customer_email,
+            gstin: invoice.customer_gstin,
+            country: invoice.customer_country || "India",
+            state_name: invoice.customer_state_name || "",
+            state_code: invoice.customer_state_code || "",
+            billing_address: invoice.customer_billing_address || "",
+            shipping_address: invoice.customer_shipping_address || "",
+            balance: invoice.previous_balance || 0,
+          };
+          const existingCustomerOption = nextCustomerOptions.find((option) => option.value === invoice.customer_id);
 
-        setItems(
-          inv.items.map(item => ({
-            _key:        `edit_${item.id}`,
-            product_id:  item.product_id,
-            product:     { id: item.product_id, name: item.product_name, code: item.product_code, unit: item.product_unit, tax_rate: item.tax_rate },
-            rate:        String(item.rate),
-            quantity:    String(item.quantity),
-            value:       Number(item.value),
-            taxRate:     Number(item.tax_rate),
-            taxValue:    Number(item.tax_value),
-            totalValue:  Number(item.total_value),
-          }))
-        );
+          setInvoiceCode(invoice.code);
+          setDate(invoice.date.split("T")[0]);
+          setTerm(PAYMENT_TERMS.find((entry) => entry.value === invoice.term) || PAYMENT_TERMS[0]);
+          setCustomer(existingCustomerOption || buildCustomerOption(customerData));
+          setPlaceOfSupplyStateCode(invoice.place_of_supply_state_code || invoice.customer_state_code || "");
+          setIsExport(Boolean(invoice.is_export));
+          setDiscountType(invoice.discount_type || "PERCENTAGE");
+          setDiscountInput(invoice.discount_input > 0 ? String(invoice.discount_input) : "");
+          setPaidAmount(invoice.paid_amount > 0 ? String(invoice.paid_amount) : "");
+          setNotes(invoice.notes || "");
+          setItems(
+            invoice.items.map((item) => ({
+              _key: `edit_${item.id}`,
+              product_id: item.product_id,
+              product: {
+                id: item.product_id,
+                name: item.product_name,
+                code: item.product_code,
+                unit: item.product_unit,
+                hsn_sac_code: item.line_hsn_sac_code || item.hsn_sac_code || "",
+              },
+              hsn_sac_code: item.line_hsn_sac_code || item.hsn_sac_code || "",
+              rate: String(
+                invoice.price_includes_gst && item.total_value && item.quantity
+                  ? round2(item.total_value / item.quantity)
+                  : item.rate
+              ),
+              quantity: String(item.quantity),
+              taxRate: Number(item.tax_rate || 0),
+            }))
+          );
+        }
       } catch {
-        toast.error("Failed to load invoice.");
-        navigate("/invoices");
+        toast.error(isEdit ? "Failed to load invoice." : "Failed to load data.");
+        if (isEdit) {
+          navigate("/invoices");
+        }
       } finally {
         setLoading(false);
       }
     }
-    fetchInvoice();
-  }, [id, isEdit, navigate]);
 
-  
-  
-  
+    load();
+  }, [fetchOptions, id, isEdit, navigate]);
+
   useEffect(() => {
-    setTotals(calcInvoiceTotals(items, discount));
-  }, [items, discount]);
+    if (selectedCustomer && !effectiveExport) {
+      setPlaceOfSupplyStateCode(selectedCustomer.state_code || "");
+    }
+    if (selectedCustomer && !isIndianCountry(selectedCustomer.country || "India")) {
+      setIsExport(true);
+      setPlaceOfSupplyStateCode("");
+    }
+  }, [selectedCustomer, effectiveExport]);
 
-  
-  
-  
-  const updateItem = useCallback((key, patch) => {
-    setItems(prev =>
-      prev.map(item => {
+  function updateItem(key, patch) {
+    setItems((current) =>
+      current.map((item) => {
         if (item._key !== key) return item;
-        const updated = { ...item, ...patch };
-
-        
-        if ("rate" in patch || "quantity" in patch || "taxRate" in patch) {
-          const { value, taxValue, totalValue } = calcItemTotals(
-            "rate"     in patch ? patch.rate     : updated.rate,
-            "quantity" in patch ? patch.quantity : updated.quantity,
-            "taxRate"  in patch ? patch.taxRate  : updated.taxRate
-          );
-          return { ...updated, value, taxValue, totalValue };
-        }
-        return updated;
+        return { ...item, ...patch };
       })
     );
-  }, []);
+  }
 
-  const selectProduct = useCallback((key, option) => {
+  function selectProduct(key, option) {
     if (!option) {
-      updateItem(key, { product_id: "", product: null, rate: "", taxRate: 0, value: 0, taxValue: 0, totalValue: 0 });
+      updateItem(key, { product_id: "", product: null, hsn_sac_code: "", rate: "", taxRate: 0 });
       return;
     }
-    const p = option.data;
+
+    const product = option.data;
     updateItem(key, {
-      product_id: p.id,
-      product:    p,
-      rate:       String(p.price),
-      taxRate:    Number(p.tax_rate),
+      product_id: product.id,
+      product,
+      hsn_sac_code: product.hsn_sac_code || "",
+      rate: String(product.price),
+      taxRate: Number(product.tax_rate || 0),
     });
-  }, [updateItem]);
+  }
 
-  const addItem = useCallback(() => {
-    setItems(prev => [...prev, newItemDraft()]);
+  function addItem() {
+    setItems((current) => [...current, createInvoiceItemDraft()]);
+  }
+
+  function removeItem(key) {
+    setItems((current) => {
+      if (current.length === 1) return current;
+      return current.filter((item) => item._key !== key);
+    });
+  }
+
+  const handleScan = useCallback(async (barcodeValue) => {
+    if (scanProcessingRef.current) return;
+
+    scanProcessingRef.current = true;
+    setScanResult({ code: barcodeValue, status: "searching" });
+
+    try {
+      const res = await api.get(`/products/barcode/${encodeURIComponent(barcodeValue)}`);
+      const product = res.data.data;
+      let targetKey = null;
+
+      setItems((current) => {
+        const existingIndex = current.findIndex((item) => item.product_id === product.id);
+        if (existingIndex !== -1) {
+          targetKey = current[existingIndex]._key;
+          return current.map((item, index) =>
+            index === existingIndex
+              ? { ...item, quantity: String((Number(item.quantity) || 0) + 1) }
+              : item
+          );
+        }
+
+        const draft = createInvoiceItemDraft();
+        targetKey = draft._key;
+        return [
+          ...current,
+          {
+            ...draft,
+            product_id: product.id,
+            product,
+            rate: String(product.price),
+            quantity: "1",
+            taxRate: Number(product.tax_rate || 0),
+          },
+        ];
+      });
+
+      setScanResult({ code: barcodeValue, status: "found", productName: product.name });
+      setTimeout(() => {
+        if (targetKey && quantityRefs.current[targetKey]) {
+          quantityRefs.current[targetKey].focus();
+          quantityRefs.current[targetKey].select();
+        }
+      }, 100);
+    } catch (error) {
+      setScanResult({ code: barcodeValue, status: "not_found" });
+      if (error?.response?.status === 404) {
+        toast.error("No product found for this barcode");
+      } else {
+        toast.error("Scanner lookup failed. Please try again.");
+      }
+    } finally {
+      scanProcessingRef.current = false;
+    }
   }, []);
 
-  const removeItem = useCallback((key) => {
-    setItems(prev => {
-      if (prev.length === 1) return prev; 
-      return prev.filter(i => i._key !== key);
-    });
-  }, []);
-
-  const handleAddCustomer = async (e) => {
-    e.preventDefault();
-    if (!custForm.name || !custForm.mobile || !custForm.address) {
-      toast.error("Name, mobile, and address are required");
+  function handleCustomerCountryChange(value) {
+    if (isIndianCountry(value)) {
+      setCustomerForm((current) => ({ ...current, country: "India" }));
       return;
     }
-    setSavingCust(true);
+
+    setCustomerForm((current) => ({
+      ...current,
+      country: value,
+      state_name: "",
+      state_code: "",
+    }));
+  }
+
+  function handleCustomerStateChange(stateCode) {
+    const state = INDIAN_STATES.find((item) => item.code === stateCode);
+    setCustomerForm((current) => ({
+      ...current,
+      state_code: state?.code || "",
+      state_name: state?.name || "",
+    }));
+  }
+
+  function handleCustomerGstinChange(value) {
+    const nextValue = value.toUpperCase();
+    const state = deriveStateFromGstin(nextValue);
+    setCustomerForm((current) => ({
+      ...current,
+      gstin: nextValue,
+      ...(state && isIndianCountry(current.country)
+        ? { state_code: state.code, state_name: state.name }
+        : {}),
+    }));
+  }
+
+  async function handleSaveCustomer(event) {
+    event.preventDefault();
+
+    if (!customerForm.name || !customerForm.mobile || !customerForm.billing_address) {
+      toast.error("Name, mobile, and billing address are required");
+      return;
+    }
+
+    if (isIndianCountry(customerForm.country) && !customerForm.state_code) {
+      toast.error("State is required for customers in India");
+      return;
+    }
+
+    setSavingCustomer(true);
     try {
-      const res = await api.post("/customers", custForm);
-      const c = res.data.data;
-      const newOpt = {
-        value: c.id,
-        label: `${c.code} — ${c.salutation} ${c.name}`,
-        data: c,
+      const payload = {
+        ...customerForm,
+        address: customerForm.billing_address,
+        shipping_address: customerForm.shipping_address || customerForm.billing_address,
       };
-      setCustomerOptions(prev => [...prev, newOpt]);
-      setCustomer(newOpt);
+
+      let nextCustomer;
+      if (customerEditMode && selectedCustomer?.id) {
+        const res = await api.put(`/customers/${selectedCustomer.id}`, payload);
+        nextCustomer = { ...selectedCustomer, ...payload };
+        toast.success("Customer updated");
+      } else {
+        const res = await api.post("/customers", payload);
+        nextCustomer = res.data.data;
+        toast.success("Customer created");
+      }
+
+      const option = buildCustomerOption(nextCustomer);
+      setCustomerOptions((current) => {
+        const otherOptions = current.filter((opt) => opt.value !== nextCustomer.id);
+        return [...otherOptions, option];
+      });
+      setCustomer(option);
       setShowAddCustomer(false);
-      setCustForm(EMPTY_CUST_FORM);
-      toast.success("Customer created & selected!");
+      setCustomerForm(EMPTY_CUSTOMER_FORM);
+      setCustomerEditMode(false);
     } catch (error) {
-      let message = error.response?.data?.error || "Failed to create customer";
+      let message = error.response?.data?.error || "Failed to save customer";
       if (error.response?.data?.details) {
-        message = Object.values(error.response.data.details).map((d) => d.msg).join(", ");
+        message = Object.values(error.response.data.details)
+          .map((detail) => detail.msg)
+          .join(", ");
       }
       toast.error(message);
     } finally {
-      setSavingCust(false);
+      setSavingCustomer(false);
     }
-  };
-
-  
-  
-  
-  function validate() {
-    const errs = {};
-    if (!date)                      errs.date     = "Date is required";
-    if (!customer)                  errs.customer = "Customer is required";
-    if (!term)                      errs.term     = "Payment term is required";
-
-    const discountNum = Number(discount);
-    if (discount !== "" && (isNaN(discountNum) || discountNum < 0))
-      errs.discount = "Must be a non-negative number";
-    if (discountNum > totals.subTotal)
-      errs.discount = "Discount cannot exceed sub-total";
-
-    items.forEach((item, idx) => {
-      if (!item.product_id)       errs[`item_${idx}_product`]  = "Select a product";
-      if (!item.rate || Number(item.rate) <= 0)
-                                   errs[`item_${idx}_rate`]    = "Enter a valid rate";
-      if (!item.quantity || Number(item.quantity) <= 0)
-                                   errs[`item_${idx}_quantity`] = "Enter valid qty";
-    });
-
-    return errs;
   }
 
-  
-  
-  
-  async function handleSubmit(e) {
-    e.preventDefault();
-    const errs = validate();
-    setErrors(errs);
-    if (Object.keys(errs).length > 0) {
-      toast.error("Please fix the errors before saving.");
+  function openEditCustomer() {
+    if (!selectedCustomer) return;
+    setCustomerForm({
+      salutation: selectedCustomer.salutation || "Mr.",
+      name: selectedCustomer.name || "",
+      mobile: selectedCustomer.mobile || "",
+      email: selectedCustomer.email || "",
+      gstin: selectedCustomer.gstin || "",
+      country: selectedCustomer.country || "India",
+      state_name: selectedCustomer.state_name || "",
+      state_code: selectedCustomer.state_code || "",
+      billing_address: selectedCustomer.billing_address || selectedCustomer.address || "",
+      shipping_address: selectedCustomer.shipping_address || "",
+    });
+    setCustomerEditMode(true);
+    setShowAddCustomer(true);
+  }
+
+  function validate() {
+    const nextErrors = {};
+
+    if (!date) nextErrors.date = "Date is required";
+    if (!customer) nextErrors.customer = "Customer is required";
+    if (!term) nextErrors.term = "Payment term is required";
+
+    if (!effectiveExport && !companyState.code) {
+      nextErrors.company = "Your company GST state is missing. Update the company GSTIN first.";
+    }
+
+    if (!effectiveExport && !placeOfSupplyStateCode) {
+      nextErrors.placeOfSupply = "Place of supply is required";
+    }
+
+    if (discountInput !== "" && (Number(discountInput) < 0 || Number.isNaN(Number(discountInput)))) {
+      nextErrors.discount = "Discount must be a non-negative number";
+    }
+
+    if (discountType === "PERCENTAGE" && Number(discountInput || 0) > 100) {
+      nextErrors.discount = "Discount cannot exceed 100%";
+    }
+
+    if (displayTotals.grandTotal < 0) {
+      nextErrors.discount = "Discount cannot exceed the total amount";
+    }
+
+    items.forEach((item, index) => {
+      if (!item.product_id) nextErrors[`item_${index}_product`] = "Select a product";
+      if (item.taxRate === "" || Number(item.taxRate) < 0) nextErrors[`item_${index}_tax`] = "Enter GST";
+      if (!item.rate || Number(item.rate) <= 0) nextErrors[`item_${index}_rate`] = "Enter a valid rate";
+      if (!item.quantity || Number(item.quantity) <= 0) nextErrors[`item_${index}_quantity`] = "Enter a valid quantity";
+    });
+
+    return nextErrors;
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    const nextErrors = validate();
+    setErrors(nextErrors);
+
+    if (Object.keys(nextErrors).length > 0) {
+      toast.error("Please fix the highlighted fields before saving.");
       return;
     }
 
     setSubmitting(true);
-    const payload = {
-      date,
-      term:        term.value,
-      customer_id: customer.value,
-      discount:    Number(discount) || 0,
-      paid_amount: Number(paidAmount) || 0,
-      notes:       notes || null,
-      items: items.map(i => ({
-        product_id: i.product_id,
-        rate:       Number(i.rate),
-        quantity:   Number(i.quantity),
-      })),
-    };
-
     try {
+      const payload = {
+        date,
+        term: term.value,
+        customer_id: customer.value,
+        place_of_supply_state_code: effectiveExport ? null : placeOfSupplyStateCode,
+        place_of_supply_state_name: effectiveExport ? null : selectedPlaceOfSupply?.name || null,
+        is_export: effectiveExport,
+        price_includes_gst: true,
+        discount: discountAmount,
+        discount_type: discountType,
+        discount_input: Number(discountInput) || 0,
+        paid_amount: Number(paidAmount) || 0,
+        notes: notes || null,
+        items: items.map((item) => ({
+          product_id: item.product_id,
+          hsn_sac_code: item.hsn_sac_code,
+          tax_rate: Number(item.taxRate) || 0,
+          rate: Number(item.rate),
+          quantity: Number(item.quantity),
+        })),
+      };
+
       if (isEdit) {
         await api.put(`/invoices/${id}`, payload);
-        toast.success("Invoice updated successfully!");
+        toast.success("Invoice updated successfully");
+        navigate(`/invoices/${id}/view`);
       } else {
         const res = await api.post("/invoices", payload);
-        toast.success("Invoice created successfully!");
-        
+        toast.success("Invoice created successfully");
         navigate(`/invoices/${res.data.data.id}/view`);
-        return;
       }
-      navigate("/invoices");
-    } catch (err) {
-      const msg = err.response?.data?.error || "Something went wrong. Try again.";
-      toast.error(msg);
+    } catch (error) {
+      toast.error(error.response?.data?.error || "Failed to save invoice");
     } finally {
       setSubmitting(false);
     }
   }
 
-  
-  
-  
   if (loading) {
     return (
       <div className="d-flex justify-content-center align-items-center" style={{ minHeight: "300px" }}>
         <div className="spinner-border text-primary" role="status">
-          <span className="visually-hidden">Loading…</span>
+          <span className="visually-hidden">Loading...</span>
         </div>
       </div>
     );
@@ -335,181 +548,331 @@ export default function InvoiceForm() {
   return (
     <div className="invoice-form-wrapper">
       <form onSubmit={handleSubmit} noValidate>
-
-        {}
         <div className="d-flex flex-wrap align-items-center justify-content-between mb-3 gap-2">
           <div>
             <h5 className="mb-0 fw-semibold">
-              <i className="fa-solid fa-file-invoice me-2 text-primary"></i>
-              {isEdit ? `Edit Invoice` : "New Invoice"}
+              <i className="fa-solid fa-file-invoice me-2 text-primary" />
+              {isEdit ? "Edit Invoice" : "New Invoice"}
             </h5>
-            {invoiceCode && (
-              <small className="text-muted">Code: <strong>{invoiceCode}</strong></small>
-            )}
+            {invoiceCode && <small className="text-muted">Code: <strong>{invoiceCode}</strong></small>}
           </div>
           <div className="d-flex gap-2 flex-wrap">
-            <button
-              type="button"
-              className="btn btn-outline-secondary btn-sm"
-              onClick={() => navigate("/invoices")}
-              disabled={submitting}
-            >
-              <i className="fa-solid fa-arrow-left me-1"></i> Back
+            <button type="button" className="btn btn-outline-secondary btn-sm" onClick={() => navigate("/invoices")} disabled={submitting}>
+              <i className="fa-solid fa-arrow-left me-1" />
+              Back
             </button>
-            <button
-              type="submit"
-              className="btn btn-primary btn-sm"
-              disabled={submitting}
-            >
+            <button type="submit" className="btn btn-primary btn-sm" disabled={submitting}>
               {submitting ? (
-                <><span className="spinner-border spinner-border-sm me-1" /> Saving…</>
+                <>
+                  <span className="spinner-border spinner-border-sm me-1" />
+                  Saving...
+                </>
               ) : (
-                <><i className="fa-solid fa-floppy-disk me-1"></i> {isEdit ? "Update Invoice" : "Save Invoice"}</>
+                <>
+                  <i className="fa-solid fa-floppy-disk me-1" />
+                  {isEdit ? "Update Invoice" : "Save Invoice"}
+                </>
               )}
             </button>
           </div>
         </div>
 
-        {}
         <div className="card border-0 shadow-sm mb-3">
           <div className="card-body">
             <div className="row g-3">
-
-              {}
               <div className="col-6 col-md-3">
-                <label className="form-label fw-medium small mb-1">
-                  <i className="fa-regular fa-calendar me-1 text-muted"></i>Date <span className="text-danger">*</span>
-                </label>
+                <label className="form-label fw-medium small mb-1">Date *</label>
                 <input
                   type="date"
                   className={`form-control form-control-sm ${errors.date ? "is-invalid" : ""}`}
                   value={date}
-                  onChange={e => setDate(e.target.value)}
+                  onChange={(event) => setDate(event.target.value)}
                   max={todayISO()}
                 />
                 {errors.date && <div className="invalid-feedback">{errors.date}</div>}
               </div>
 
-              {}
               <div className="col-6 col-md-3">
-                <label className="form-label fw-medium small mb-1">
-                  <i className="fa-solid fa-money-bill-wave me-1 text-muted"></i>Term <span className="text-danger">*</span>
-                </label>
-                <Select
-                  options={PAYMENT_TERMS}
-                  value={term}
-                  onChange={setTerm}
-                  styles={selectStyles}
-                  placeholder="Select term…"
-                  className={errors.term ? "is-invalid-select" : ""}
-                />
-                {errors.term && <div className="text-danger" style={{ fontSize: "0.75rem" }}>{errors.term}</div>}
+                <label className="form-label fw-medium small mb-1">Payment Term *</label>
+                <Select options={PAYMENT_TERMS} value={term} onChange={setTerm} styles={selectStyles} />
               </div>
 
-              {}
               <div className="col-12 col-md-6">
                 <div className="d-flex align-items-center justify-content-between mb-1">
-                  <label className="form-label fw-medium small mb-0">
-                    <i className="fa-solid fa-user me-1 text-muted"></i>Customer <span className="text-danger">*</span>
-                  </label>
-                  <button
-                    type="button"
-                    className="btn btn-outline-success btn-sm py-0 px-2"
-                    style={{ fontSize: "0.75rem", lineHeight: "1.6" }}
-                    onClick={() => setShowAddCustomer(true)}
-                    title="Add new customer"
-                    id="add-customer-inline-btn"
-                  >
-                    <i className="fa-solid fa-user-plus me-1"></i>New
-                  </button>
+                  <label className="form-label fw-medium small mb-0">Customer / Party *</label>
+                  <div className="d-flex gap-1">
+                    {selectedCustomer && (
+                      <button
+                        type="button"
+                        className="btn btn-outline-primary btn-sm py-0 px-2"
+                        style={{ fontSize: "0.75rem", lineHeight: "1.6" }}
+                        onClick={openEditCustomer}
+                      >
+                        <i className="fa-solid fa-pen-to-square" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-outline-success btn-sm py-0 px-2"
+                      style={{ fontSize: "0.75rem", lineHeight: "1.6" }}
+                      onClick={() => {
+                        setCustomerEditMode(false);
+                        setCustomerForm(EMPTY_CUSTOMER_FORM);
+                        setShowAddCustomer(true);
+                      }}
+                    >
+                      <i className="fa-solid fa-user-plus me-1" />
+                      New
+                    </button>
+                  </div>
                 </div>
                 <Select
                   options={customerOptions}
                   value={customer}
                   onChange={setCustomer}
                   styles={selectStyles}
-                  placeholder="Search customer…"
+                  placeholder="Search customer..."
                   isClearable
                   filterOption={(option, input) =>
                     option.label.toLowerCase().includes(input.toLowerCase()) ||
                     (option.data?.mobile || "").includes(input)
                   }
-                  noOptionsMessage={() => "No customers found"}
-                  className={errors.customer ? "is-invalid-select" : ""}
                 />
-                {errors.customer && <div className="text-danger" style={{ fontSize: "0.75rem" }}>{errors.customer}</div>}
-                {}
-                {customer?.data && (
+                {errors.customer && <div className="text-danger mt-1" style={{ fontSize: "0.75rem" }}>{errors.customer}</div>}
+                {selectedCustomer && (
                   <small className="text-muted d-block mt-1">
-                    <i className="fa-solid fa-phone fa-xs me-1"></i>{customer.data.mobile}
-                    {customer.data.address && <> &nbsp;·&nbsp; <i className="fa-solid fa-location-dot fa-xs me-1"></i>{customer.data.address}</>}
+                    {selectedCustomer.mobile}
+                    {selectedCustomer.state_name ? ` • ${selectedCustomer.state_name}` : ""}
+                    {selectedCustomer.country ? ` • ${selectedCustomer.country}` : ""}
+                    {selectedCustomer.gstin ? ` • GSTIN: ${selectedCustomer.gstin}` : ""}
                   </small>
                 )}
               </div>
 
+              <div className="col-12 col-md-4">
+                <label className="form-label fw-medium small mb-1">Place of Supply</label>
+                <select
+                  className={`form-select form-select-sm ${errors.placeOfSupply ? "is-invalid" : ""}`}
+                  value={placeOfSupplyStateCode}
+                  onChange={(event) => setPlaceOfSupplyStateCode(event.target.value)}
+                  disabled={effectiveExport}
+                >
+                  <option value="">{effectiveExport ? "Export supply" : "Select state"}</option>
+                  {INDIAN_STATES.filter((state) => Number(state.code) < 90).map((state) => (
+                    <option key={state.code} value={state.code}>
+                      {state.name}
+                    </option>
+                  ))}
+                </select>
+                {errors.placeOfSupply && <div className="invalid-feedback">{errors.placeOfSupply}</div>}
+              </div>
+
+              <div className="col-6 col-md-4">
+                <label className="form-label fw-medium small mb-1">Company GST State</label>
+                <input
+                  className={`form-control form-control-sm ${errors.company ? "is-invalid" : ""}`}
+                  value={companyState.name ? `${companyState.name} (${companyState.code})` : ""}
+                  readOnly
+                  placeholder="Update company GSTIN in Profile"
+                />
+                {errors.company && <div className="invalid-feedback">{errors.company}</div>}
+              </div>
+
+              <div className="col-6 col-md-4 d-flex flex-column justify-content-end">
+                <div className="form-check mb-2">
+                  <input
+                    id="invoice-export-toggle"
+                    className="form-check-input"
+                    type="checkbox"
+                    checked={effectiveExport}
+                    disabled={selectedCustomer ? !isIndianCountry(selectedCustomer.country || "India") : false}
+                    onChange={(event) => {
+                      const checked = event.target.checked;
+                      setIsExport(checked);
+                      if (checked) {
+                        setPlaceOfSupplyStateCode("");
+                      } else {
+                        setPlaceOfSupplyStateCode(selectedCustomer?.state_code || "");
+                      }
+                    }}
+                  />
+                  <label className="form-check-label small" htmlFor="invoice-export-toggle">
+                    Mark as Export Invoice
+                  </label>
+                </div>
+              </div>
             </div>
+
+            {effectiveExport && (
+              <div className="alert alert-info mt-3 mb-0 py-2 small">
+                <strong>Export supply:</strong> this invoice will use IGST logic. If all item GST rates are `0%`, the print view will show the zero-rated export declaration note.
+              </div>
+            )}
           </div>
         </div>
 
-        {}
         <div className="card border-0 shadow-sm mb-3">
           <div className="card-header bg-white border-bottom py-2 d-flex justify-content-between align-items-center">
             <span className="fw-semibold small">
-              <i className="fa-solid fa-list me-2 text-primary"></i>Products / Services
+              <i className="fa-solid fa-list me-2 text-primary" />
+              Products / Services
             </span>
-            <button type="button" className="btn btn-outline-primary btn-sm" onClick={addItem}>
-              <i className="fa-solid fa-plus me-1"></i> Add Row
-            </button>
+            <div className="d-flex gap-2">
+              <button
+                type="button"
+                className={`btn btn-sm ${showScanner ? "btn-danger" : "btn-outline-success"}`}
+                onClick={() => setShowScanner((current) => !current)}
+              >
+                <i className={`fa-solid ${showScanner ? "fa-xmark" : "fa-barcode"} me-1`} />
+                {showScanner ? "Close Scanner" : "Scan"}
+              </button>
+              <button type="button" className="btn btn-outline-primary btn-sm" onClick={addItem}>
+                <i className="fa-solid fa-plus me-1" />
+                Add Row
+              </button>
+            </div>
           </div>
-          <div className="card-body p-0">
 
-            {}
-            <div className="table-responsive d-none d-md-block">
-              <table className="table table-sm table-hover align-middle mb-0 invoice-items-table">
+          <div className="card-body p-0">
+            <div className="table-responsive d-none d-xl-block">
+              <table className="table table-sm align-middle mb-0 invoice-items-table">
                 <thead className="table-light">
                   <tr>
                     <th style={{ width: "34px" }} className="text-center">#</th>
-                    <th style={{ minWidth: "180px" }}>Product</th>
-                    <th style={{ width: "100px" }}>Rate (₹)</th>
-                    <th style={{ width: "90px" }}>Qty</th>
-                    <th style={{ width: "110px" }}>Value (₹)</th>
-                    {hasTax && <th style={{ width: "80px" }}>Tax %</th>}
-                    {hasTax && <th style={{ width: "100px" }}>Tax (₹)</th>}
-                    <th style={{ width: "115px" }}>Total (₹)</th>
-                    <th style={{ width: "40px" }}></th>
+                    <th style={{ minWidth: "220px" }}>Item</th>
+                    <th style={{ width: "120px" }}>HSN/SAC (Optional)</th>
+                    <th style={{ width: "90px" }} className="text-end">GST %</th>
+                    <th style={{ width: "90px" }} className="text-end">Rate</th>
+                    <th style={{ width: "90px" }} className="text-end">Qty</th>
+                    <th style={{ width: "110px" }} className="text-end">Taxable</th>
+                    <th style={{ width: "120px" }} className="text-end">CGST</th>
+                    <th style={{ width: "120px" }} className="text-end">SGST</th>
+                    <th style={{ width: "120px" }} className="text-end">IGST</th>
+                    <th style={{ width: "115px" }} className="text-end">Total</th>
+                    <th style={{ width: "42px" }} />
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map((item, idx) => (
-                    <InvoiceItemRow
-                      key={item._key}
-                      item={item}
-                      idx={idx}
-                      hasTax={hasTax}
-                      productOptions={productOptions}
-                      errors={errors}
-                      onProductChange={(opt) => selectProduct(item._key, opt)}
-                      onFieldChange={(field, value) => updateItem(item._key, { [field]: value })}
-                      onRemove={() => removeItem(item._key)}
-                      canRemove={items.length > 1}
-                    />
-                  ))}
+                  {items.map((item, index) => {
+                    const previewItem = displayItems[index];
+                    const selectedProduct = item.product_id
+                      ? productOptions.find((option) => option.value === item.product_id) || null
+                      : null;
+
+                    return (
+                      <tr key={item._key}>
+                        <td className="text-center text-muted small">{index + 1}</td>
+                        <td>
+                          <Select
+                            options={productOptions}
+                            value={selectedProduct}
+                            onChange={(option) => selectProduct(item._key, option)}
+                            menuPortalTarget={document.body}
+                            styles={{
+                              ...selectStyles,
+                              menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+                              control: (base, state) => ({
+                                ...selectStyles.control(base, state),
+                                minHeight: "31px",
+                                height: "31px",
+                              }),
+                            }}
+                            placeholder="Search product..."
+                            isClearable
+                            filterOption={(option, input) => option.label.toLowerCase().includes(input.toLowerCase())}
+                          />
+                          {errors[`item_${index}_product`] && (
+                            <div className="text-danger mt-1" style={{ fontSize: "0.7rem" }}>{errors[`item_${index}_product`]}</div>
+                          )}
+                        </td>
+                        <td>
+                          <input
+                            className={`form-control form-control-sm text-uppercase ${errors[`item_${index}_hsn`] ? "is-invalid" : ""}`}
+                            value={item.hsn_sac_code || ""}
+                            onChange={(event) => updateItem(item._key, { hsn_sac_code: event.target.value.toUpperCase() })}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            type="number"
+                            list="gst-rate-suggestions"
+                            className={`form-control form-control-sm text-end ${errors[`item_${index}_tax`] ? "is-invalid" : ""}`}
+                            value={item.taxRate}
+                            onChange={(event) => updateItem(item._key, { taxRate: event.target.value })}
+                            min="0"
+                            max="100"
+                            step="0.001"
+                          />
+                        </td>
+                        <td>
+                          <input
+                            type="number"
+                            className={`form-control form-control-sm text-end ${errors[`item_${index}_rate`] ? "is-invalid" : ""}`}
+                            value={item.rate}
+                            onChange={(event) => updateItem(item._key, { rate: event.target.value })}
+                            min="0"
+                            step="0.01"
+                          />
+                        </td>
+                        <td>
+                          <input
+                            ref={(element) => { quantityRefs.current[item._key] = element; }}
+                            type="number"
+                            className={`form-control form-control-sm text-end ${errors[`item_${index}_quantity`] ? "is-invalid" : ""}`}
+                            value={item.quantity}
+                            onChange={(event) => updateItem(item._key, { quantity: event.target.value })}
+                            min="0"
+                            step="0.001"
+                          />
+                        </td>
+                        <td className="text-end small">{formatCurrency(previewItem?.taxableValue)}</td>
+                        <td className="text-end small">
+                          {previewItem?.cgstRate ? `${formatTaxRate(previewItem.cgstRate)}% • ₹${formatCurrency(previewItem.cgstAmount)}` : "-"}
+                        </td>
+                        <td className="text-end small">
+                          {previewItem?.sgstRate ? `${formatTaxRate(previewItem.sgstRate)}% • ₹${formatCurrency(previewItem.sgstAmount)}` : "-"}
+                        </td>
+                        <td className="text-end small">
+                          {previewItem?.igstRate ? `${formatTaxRate(previewItem.igstRate)}% • ₹${formatCurrency(previewItem.igstAmount)}` : "-"}
+                        </td>
+                        <td className="text-end fw-semibold small">{formatCurrency(previewItem?.totalValue)}</td>
+                        <td className="text-center">
+                          <button
+                            type="button"
+                            className="btn btn-link btn-sm p-0 text-danger"
+                            onClick={() => removeItem(item._key)}
+                            disabled={items.length === 1}
+                            style={{ opacity: items.length > 1 ? 1 : 0.3 }}
+                          >
+                            <i className="fa-solid fa-trash-can" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
 
-            {/* Mobile card layout */}
-            <div className="d-md-none p-2">
-              {items.map((item, idx) => {
+            <div className="d-xl-none p-2">
+              {items.map((item, index) => {
+                const previewItem = displayItems[index];
                 const selectedProduct = item.product_id
-                  ? productOptions.find(o => o.value === item.product_id) || null
+                  ? productOptions.find((option) => option.value === item.product_id) || null
                   : null;
+
                 return (
                   <div key={`mobile_${item._key}`} className="bg-white border rounded-3 shadow-sm p-3 mb-2">
                     <div className="d-flex align-items-center justify-content-between mb-3">
-                      <span className="small fw-semibold text-muted text-uppercase">Item {idx + 1}</span>
-                      <button type="button" className="btn btn-link btn-sm p-0 text-danger" onClick={() => removeItem(item._key)} disabled={items.length === 1} style={{ opacity: items.length > 1 ? 1 : 0.3 }}>
-                        <i className="fa-solid fa-trash-can"></i>
+                      <span className="small fw-semibold text-muted text-uppercase">Item {index + 1}</span>
+                      <button
+                        type="button"
+                        className="btn btn-link btn-sm p-0 text-danger"
+                        onClick={() => removeItem(item._key)}
+                        disabled={items.length === 1}
+                        style={{ opacity: items.length > 1 ? 1 : 0.3 }}
+                      >
+                        <i className="fa-solid fa-trash-can" />
                       </button>
                     </div>
 
@@ -518,68 +881,87 @@ export default function InvoiceForm() {
                       <Select
                         options={productOptions}
                         value={selectedProduct}
-                        onChange={(opt) => selectProduct(item._key, opt)}
+                        onChange={(option) => selectProduct(item._key, option)}
                         menuPortalTarget={document.body}
-                        styles={{ ...selectStyles, menuPortal: base => ({ ...base, zIndex: 9999 }) }}
-                        placeholder="Search product…"
+                        styles={{ ...selectStyles, menuPortal: (base) => ({ ...base, zIndex: 9999 }) }}
+                        placeholder="Search product..."
                         isClearable
-                        filterOption={(opt, input) => opt.label.toLowerCase().includes(input.toLowerCase())}
-                        noOptionsMessage={() => "No products"}
                       />
-                      {errors[`item_${idx}_product`] && (
-                        <div className="text-danger mt-1" style={{ fontSize: "0.7rem" }}>{errors[`item_${idx}_product`]}</div>
-                      )}
-                      {item.product?.current_stock !== undefined && (
-                        <small className={`d-block mt-1 ${item.product.current_stock < 5 ? "text-warning" : "text-muted"}`} style={{ fontSize: "0.68rem" }}>
-                          <i className="fa-solid fa-boxes-stacked fa-xs me-1"></i>
-                          Stock: {item.product.current_stock} {item.product?.unit}
-                        </small>
+                      {errors[`item_${index}_product`] && (
+                        <div className="text-danger mt-1" style={{ fontSize: "0.7rem" }}>{errors[`item_${index}_product`]}</div>
                       )}
                     </div>
 
                     <div className="row g-2 mb-3">
                       <div className="col-6">
-                        <label className="form-label fw-medium small mb-1">Rate (₹)</label>
+                        <label className="form-label fw-medium small mb-1">HSN/SAC (Optional)</label>
+                        <input
+                          className={`form-control form-control-sm text-uppercase ${errors[`item_${index}_hsn`] ? "is-invalid" : ""}`}
+                          value={item.hsn_sac_code || ""}
+                          onChange={(event) => updateItem(item._key, { hsn_sac_code: event.target.value.toUpperCase() })}
+                        />
+                      </div>
+                      <div className="col-6">
+                        <label className="form-label fw-medium small mb-1">GST %</label>
                         <input
                           type="number"
-                          className={`form-control form-control-sm text-end ${errors[`item_${idx}_rate`] ? "is-invalid" : ""}`}
+                          list="gst-rate-suggestions"
+                          className={`form-control form-control-sm text-end ${errors[`item_${index}_tax`] ? "is-invalid" : ""}`}
+                          value={item.taxRate}
+                          onChange={(event) => updateItem(item._key, { taxRate: event.target.value })}
+                          min="0"
+                          max="100"
+                          step="0.001"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="row g-2 mb-3">
+                      <div className="col-6">
+                        <label className="form-label fw-medium small mb-1">Rate</label>
+                        <input
+                          type="number"
+                          className={`form-control form-control-sm text-end ${errors[`item_${index}_rate`] ? "is-invalid" : ""}`}
                           value={item.rate}
-                          onChange={e => updateItem(item._key, { rate: e.target.value })}
-                          min="0" step="0.01" placeholder="0.00"
+                          onChange={(event) => updateItem(item._key, { rate: event.target.value })}
+                          min="0"
+                          step="0.01"
                         />
                       </div>
                       <div className="col-6">
                         <label className="form-label fw-medium small mb-1">Qty</label>
                         <input
+                          ref={(element) => { quantityRefs.current[item._key] = element; }}
                           type="number"
-                          className={`form-control form-control-sm text-end ${errors[`item_${idx}_quantity`] ? "is-invalid" : ""}`}
+                          className={`form-control form-control-sm text-end ${errors[`item_${index}_quantity`] ? "is-invalid" : ""}`}
                           value={item.quantity}
-                          onChange={e => updateItem(item._key, { quantity: e.target.value })}
-                          min="0" step="0.001" placeholder="0"
+                          onChange={(event) => updateItem(item._key, { quantity: event.target.value })}
+                          min="0"
+                          step="0.001"
                         />
                       </div>
                     </div>
 
                     <div className="border rounded-3 bg-light px-2 py-1">
-                      <div className="d-flex justify-content-between align-items-center py-1 small">
-                        <span className="text-muted">Value</span>
-                        <span className="fw-medium">{formatCurrency(item.value)}</span>
+                      <div className="d-flex justify-content-between py-1 small">
+                        <span className="text-muted">Taxable Value</span>
+                        <span className="fw-medium">₹ {formatCurrency(previewItem?.taxableValue)}</span>
                       </div>
-                      {hasTax && (
-                        <div className="d-flex justify-content-between align-items-center py-1 small border-top">
-                          <span className="text-muted">Tax %</span>
-                          <span className="fw-medium">{item.taxRate > 0 ? `${item.taxRate}%` : "—"}</span>
-                        </div>
-                      )}
-                      {hasTax && (
-                        <div className="d-flex justify-content-between align-items-center py-1 small border-top">
-                          <span className="text-muted">Tax</span>
-                          <span className="fw-medium">{item.taxRate > 0 ? formatCurrency(item.taxValue) : "—"}</span>
-                        </div>
-                      )}
-                      <div className="d-flex justify-content-between align-items-center py-1 small border-top">
+                      <div className="d-flex justify-content-between py-1 small border-top">
+                        <span className="text-muted">CGST</span>
+                        <span className="fw-medium">{previewItem?.cgstRate ? `${formatTaxRate(previewItem.cgstRate)}% • ₹${formatCurrency(previewItem.cgstAmount)}` : "-"}</span>
+                      </div>
+                      <div className="d-flex justify-content-between py-1 small border-top">
+                        <span className="text-muted">SGST</span>
+                        <span className="fw-medium">{previewItem?.sgstRate ? `${formatTaxRate(previewItem.sgstRate)}% • ₹${formatCurrency(previewItem.sgstAmount)}` : "-"}</span>
+                      </div>
+                      <div className="d-flex justify-content-between py-1 small border-top">
+                        <span className="text-muted">IGST</span>
+                        <span className="fw-medium">{previewItem?.igstRate ? `${formatTaxRate(previewItem.igstRate)}% • ₹${formatCurrency(previewItem.igstAmount)}` : "-"}</span>
+                      </div>
+                      <div className="d-flex justify-content-between py-1 small border-top">
                         <span className="text-muted">Total</span>
-                        <span className="fw-semibold text-primary">{formatCurrency(item.totalValue)}</span>
+                        <span className="fw-semibold text-primary">₹ {formatCurrency(previewItem?.totalValue)}</span>
                       </div>
                     </div>
                   </div>
@@ -587,221 +969,320 @@ export default function InvoiceForm() {
               })}
             </div>
 
+            <datalist id="gst-rate-suggestions">
+              {GST_RATE_OPTIONS.map((rate) => (
+                <option key={rate} value={rate}>
+                  {formatTaxRate(rate)}%
+                </option>
+              ))}
+            </datalist>
           </div>
 
-          {}
           <div className="card-footer bg-white border-top py-2">
             <button type="button" className="btn btn-link btn-sm text-primary p-0" onClick={addItem}>
-              <i className="fa-solid fa-circle-plus me-1"></i> Add another product
+              <i className="fa-solid fa-circle-plus me-1" />
+              Add another product
             </button>
           </div>
         </div>
 
-        {}
         <div className="row g-3 mb-4">
-
-          {}
           <div className="col-12 col-md-6">
             <div className="card border-0 shadow-sm h-100">
               <div className="card-body">
-                <label className="form-label fw-medium small">
-                  <i className="fa-solid fa-note-sticky me-1 text-muted"></i>Notes (optional)
-                </label>
+                <label className="form-label fw-medium small">Notes / Terms</label>
                 <textarea
                   className="form-control form-control-sm"
-                  rows={4}
+                  rows={5}
                   value={notes}
-                  onChange={e => setNotes(e.target.value)}
-                  placeholder="Payment instructions, terms, etc."
+                  onChange={(event) => setNotes(event.target.value)}
+                  placeholder="Terms, payment instructions, export declaration notes, etc."
                 />
-                {}
-                {totals.grandTotal > 0 && (
-                  <div className="mt-2 p-2 rounded bg-light border">
-                    <small className="text-muted d-block" style={{ fontSize: "0.7rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>Amount in Words</small>
-                    <span className="fw-medium" style={{ fontSize: "0.8rem" }}>{totals.amountInWords}</span>
+                {displayTotals.grandTotal > 0 && (
+                  <div className="mt-3 p-2 rounded bg-light border">
+                    <small className="text-muted d-block" style={{ fontSize: "0.7rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                      Amount in Words
+                    </small>
+                    <span className="fw-medium" style={{ fontSize: "0.8rem" }}>{displayTotals.amountInWords}</span>
                   </div>
                 )}
               </div>
             </div>
           </div>
 
-          {}
           <div className="col-12 col-md-6">
             <div className="card border-0 shadow-sm">
               <div className="card-body">
                 <table className="table table-sm table-borderless mb-0">
                   <tbody>
                     <tr>
-                      <td className="text-muted small py-1">Sub Total</td>
-                      <td className="text-end fw-medium small py-1">₹ {formatCurrency(totals.subTotal)}</td>
+                      <td className="text-muted small py-1">Sub Total (Before Discount)</td>
+                      <td className="text-end fw-medium small py-1">₹ {formatCurrency(displayTotals.subTotal)}</td>
                     </tr>
-                    {hasTax && (
-                      <tr>
-                        <td className="text-muted small py-1">Total Tax (GST)</td>
-                        <td className="text-end fw-medium small py-1">₹ {formatCurrency(totals.totalTax)}</td>
-                      </tr>
-                    )}
-
-                    {}
+                    <tr>
+                      <td className="text-muted small py-1">Taxable Value</td>
+                      <td className="text-end fw-medium small py-1">₹ {formatCurrency(displayTotals.taxableTotal)}</td>
+                    </tr>
+                    <tr>
+                      <td className="text-muted small py-1">Total CGST</td>
+                      <td className="text-end fw-medium small py-1">₹ {formatCurrency(displayTotals.totalCgst)}</td>
+                    </tr>
+                    <tr>
+                      <td className="text-muted small py-1">Total SGST</td>
+                      <td className="text-end fw-medium small py-1">₹ {formatCurrency(displayTotals.totalSgst)}</td>
+                    </tr>
+                    <tr>
+                      <td className="text-muted small py-1">Total IGST</td>
+                      <td className="text-end fw-medium small py-1">₹ {formatCurrency(displayTotals.totalIgst)}</td>
+                    </tr>
                     <tr>
                       <td className="py-1">
                         <div className="d-flex align-items-center gap-2">
-                          <span className="text-muted small">Discount (₹)</span>
+                          <span className="text-muted small">Discount</span>
+                          <div className="btn-group btn-group-sm" role="group" style={{ height: "24px" }}>
+                            <button
+                              type="button"
+                              className={`btn btn-outline-primary py-0 px-2 ${discountType === "PERCENTAGE" ? "active" : ""}`}
+                              onClick={() => setDiscountType("PERCENTAGE")}
+                              style={{ fontSize: "0.65rem" }}
+                            >
+                              %
+                            </button>
+                            <button
+                              type="button"
+                              className={`btn btn-outline-primary py-0 px-2 ${discountType === "AMOUNT" ? "active" : ""}`}
+                              onClick={() => setDiscountType("AMOUNT")}
+                              style={{ fontSize: "0.65rem" }}
+                            >
+                              ₹
+                            </button>
+                          </div>
                         </div>
+                        {discountAmount > 0 && discountType === "PERCENTAGE" && (
+                          <div className="text-success small" style={{ fontSize: "0.75rem" }}>
+                            = ₹ {formatCurrency(discountAmount)}
+                          </div>
+                        )}
                       </td>
-                      <td className="text-end py-1" style={{ width: "130px" }}>
+                      <td className="text-end py-1">
                         <input
                           type="number"
                           className={`form-control form-control-sm text-end ${errors.discount ? "is-invalid" : ""}`}
-                          value={discount}
-                          onChange={e => setDiscount(e.target.value)}
+                          value={discountInput}
+                          onChange={(event) => setDiscountInput(event.target.value)}
                           min="0"
+                          max={discountType === "PERCENTAGE" ? "100" : undefined}
                           step="0.01"
-                          placeholder="0.00"
-                          style={{ maxWidth: "110px", marginLeft: "auto" }}
+                          placeholder="0"
+                          style={{ maxWidth: "100px", marginLeft: "auto" }}
                         />
-                        {errors.discount && (
-                          <div className="text-danger mt-1" style={{ fontSize: "0.7rem" }}>{errors.discount}</div>
-                        )}
+                        {errors.discount && <div className="text-danger mt-1" style={{ fontSize: "0.7rem" }}>{errors.discount}</div>}
                       </td>
                     </tr>
+                    <tr className="border-top">
+                      <td className="fw-bold py-2">Grand Total</td>
+                      <td className="text-end fw-bold py-2 text-primary fs-6">₹ {formatCurrency(displayTotals.grandTotal)}</td>
+                    </tr>
 
-                    {}
-                    {customer?.data?.balance !== undefined && Number(customer.data.balance) !== 0 && (
-                      <tr>
-                        <td className="py-1">
-                          <span className="text-muted small">Previous Balance (₹)</span>
-                        </td>
-                        <td className="text-end fw-medium small py-1">
-                          <span className={Number(customer.data.balance) < 0 ? "text-danger" : "text-success"}>
-                            {Number(customer.data.balance) < 0 ? "Due: " : "Adv: "} ₹ {formatCurrency(Math.abs(Number(customer.data.balance)))}
-                          </span>
-                        </td>
-                      </tr>
+                    {customer && (
+                      <>
+                        <tr>
+                          <td className="text-muted small py-1">Previous Balance</td>
+                          <td className="text-end fw-medium small py-1">
+                            {customerBalance < 0 ? "Due" : customerBalance > 0 ? "Advance" : "Clear"}: ₹ {formatCurrency(Math.abs(customerBalance))}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="text-muted small py-1">Net Payable</td>
+                          <td className="text-end fw-medium small py-1">₹ {formatCurrency(displayTotals.grandTotal - customerBalance)}</td>
+                        </tr>
+                      </>
                     )}
 
-                    {}
-                    {customer?.data?.balance !== undefined && (
-                      <tr className="border-top">
-                        <td className="py-1 fw-medium small">Net Payable</td>
-                        <td className="text-end fw-bold small py-1">
-                          ₹ {formatCurrency(totals.grandTotal - Number(customer.data.balance || 0))}
-                        </td>
-                      </tr>
-                    )}
-
-                    {}
                     <tr>
                       <td className="py-1">
-                        <div className="d-flex align-items-center gap-2">
-                          <span className="text-muted small">Paid Amount (₹)</span>
-                        </div>
+                        <span className="text-muted small">Paid Amount (₹)</span>
                       </td>
-                      <td className="text-end py-1" style={{ width: "130px" }}>
+                      <td className="text-end py-1">
                         <input
                           type="number"
                           className="form-control form-control-sm text-end"
                           value={paidAmount}
-                          onChange={e => setPaidAmount(e.target.value)}
+                          onChange={(event) => setPaidAmount(event.target.value)}
                           min="0"
                           step="0.01"
                           placeholder="0.00"
-                          style={{ maxWidth: "110px", marginLeft: "auto" }}
+                          style={{ maxWidth: "100px", marginLeft: "auto" }}
                         />
                       </td>
                     </tr>
 
-                    {totals.roundOff !== 0 && (
-                      <tr>
-                        <td className="text-muted small py-1">Round Off</td>
-                        <td className="text-end fw-medium small py-1">
-                          {totals.roundOff > 0 ? "+" : ""}₹ {formatCurrency(totals.roundOff)}
+                    {customer && (
+                      <tr className="border-top">
+                        <td className="fw-medium py-1">{projectedBalance >= -0.01 ? "Projected Advance / Clear" : "Projected Balance Due"}</td>
+                        <td className={`text-end fw-bold small py-1 ${projectedBalance >= -0.01 ? "text-success" : "text-danger"}`}>
+                          ₹ {formatCurrency(Math.abs(projectedBalance))}
                         </td>
                       </tr>
                     )}
-
-                    <tr className="border-top">
-                      <td className="fw-bold py-2">Grand Total</td>
-                      <td className="text-end fw-bold py-2 text-primary fs-6">
-                        ₹ {formatCurrency(totals.grandTotal)}
-                      </td>
-                    </tr>
                   </tbody>
                 </table>
               </div>
             </div>
           </div>
-
         </div>
 
-        {}
         <div className="d-flex flex-wrap gap-2 justify-content-end mb-4">
-          <button
-            type="button"
-            className="btn btn-outline-secondary"
-            onClick={() => navigate("/invoices")}
-            disabled={submitting}
-          >
-            <i className="fa-solid fa-xmark me-1"></i> Cancel
+          <button type="button" className="btn btn-outline-secondary" onClick={() => navigate("/invoices")} disabled={submitting}>
+            <i className="fa-solid fa-xmark me-1" />
+            Cancel
           </button>
           <button type="submit" className="btn btn-primary" disabled={submitting}>
             {submitting ? (
-              <><span className="spinner-border spinner-border-sm me-2" />Saving…</>
+              <>
+                <span className="spinner-border spinner-border-sm me-2" />
+                Saving...
+              </>
             ) : (
-              <><i className="fa-solid fa-floppy-disk me-1"></i>{isEdit ? "Update Invoice" : "Save & Print"}</>
+              <>
+                <i className="fa-solid fa-floppy-disk me-1" />
+                {isEdit ? "Update Invoice" : "Save & View"}
+              </>
             )}
           </button>
         </div>
-
       </form>
 
       {showAddCustomer && (
         <>
-          <div className="modal-backdrop fade show" onClick={() => setShowAddCustomer(false)}></div>
+          <div className="modal-backdrop fade show" onClick={() => setShowAddCustomer(false)} />
           <div className="modal fade show d-block" tabIndex="-1" style={{ zIndex: 1055 }}>
-            <div className="modal-dialog modal-dialog-centered">
+            <div className="modal-dialog modal-dialog-centered modal-lg">
               <div className="modal-content border-0 shadow">
                 <div className="modal-header">
                   <h6 className="modal-title fw-semibold">
-                    <i className="fa-solid fa-user-plus me-2 text-success"></i>Add New Customer
+                    <i className={`fa-solid ${customerEditMode ? "fa-user-pen text-primary" : "fa-user-plus text-success"} me-2`} />
+                    {customerEditMode ? "Edit Customer" : "Add New Customer"}
                   </h6>
-                  <button type="button" className="btn-close" onClick={() => setShowAddCustomer(false)}></button>
+                  <button type="button" className="btn-close" onClick={() => setShowAddCustomer(false)} />
                 </div>
-                <form onSubmit={handleAddCustomer}>
+
+                <form onSubmit={handleSaveCustomer}>
                   <div className="modal-body">
                     <div className="row g-3">
-                      <div className="col-4">
+                      <div className="col-4 col-md-2">
                         <label className="form-label small fw-medium">Salutation</label>
-                        <select className="form-select form-select-sm" value={custForm.salutation} onChange={(e) => setCustForm({ ...custForm, salutation: e.target.value })}>
-                          {SALUTATIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+                        <select
+                          className="form-select form-select-sm"
+                          value={customerForm.salutation}
+                          onChange={(event) => setCustomerForm({ ...customerForm, salutation: event.target.value })}
+                        >
+                          {SALUTATIONS.map((value) => (
+                            <option key={value} value={value}>{value}</option>
+                          ))}
                         </select>
                       </div>
-                      <div className="col-8">
+                      <div className="col-8 col-md-5">
                         <label className="form-label small fw-medium">Name *</label>
-                        <input className="form-control form-control-sm" value={custForm.name} onChange={(e) => setCustForm({ ...custForm, name: e.target.value })} required />
+                        <input
+                          className="form-control form-control-sm"
+                          value={customerForm.name}
+                          onChange={(event) => setCustomerForm({ ...customerForm, name: event.target.value })}
+                          required
+                        />
                       </div>
-                      <div className="col-6">
+                      <div className="col-6 col-md-5">
                         <label className="form-label small fw-medium">Mobile *</label>
-                        <PhoneInput className="input-group-sm" value={custForm.mobile} onChange={(e) => setCustForm({ ...custForm, mobile: e.target.value })} required />
+                        <PhoneInput
+                          className="input-group-sm"
+                          value={customerForm.mobile}
+                          onChange={(event) => setCustomerForm({ ...customerForm, mobile: event.target.value })}
+                          required
+                        />
                       </div>
-                      <div className="col-6">
+                      <div className="col-6 col-md-4">
                         <label className="form-label small fw-medium">Email</label>
-                        <input type="email" className="form-control form-control-sm" value={custForm.email} onChange={(e) => setCustForm({ ...custForm, email: e.target.value })} />
+                        <input
+                          type="email"
+                          className="form-control form-control-sm"
+                          value={customerForm.email}
+                          onChange={(event) => setCustomerForm({ ...customerForm, email: event.target.value })}
+                        />
                       </div>
-                      <div className="col-12">
-                        <label className="form-label small fw-medium">Address *</label>
-                        <textarea className="form-control form-control-sm" rows={2} value={custForm.address} onChange={(e) => setCustForm({ ...custForm, address: e.target.value })} required />
+                      <div className="col-6 col-md-4">
+                        <label className="form-label small fw-medium">Country</label>
+                        <input
+                          className="form-control form-control-sm"
+                          value={customerForm.country}
+                          onChange={(event) => handleCustomerCountryChange(event.target.value)}
+                        />
                       </div>
-                      <div className="col-12">
+                      <div className="col-6 col-md-4">
                         <label className="form-label small fw-medium">GSTIN</label>
-                        <input className="form-control form-control-sm" value={custForm.gstin} onChange={(e) => setCustForm({ ...custForm, gstin: e.target.value })} placeholder="Optional" />
+                        <input
+                          className="form-control form-control-sm text-uppercase"
+                          value={customerForm.gstin}
+                          onChange={(event) => handleCustomerGstinChange(event.target.value)}
+                          placeholder="Optional"
+                        />
+                      </div>
+                      <div className="col-6 col-md-8">
+                        <label className="form-label small fw-medium">State {isIndianCountry(customerForm.country) ? "*" : ""}</label>
+                        <select
+                          className="form-select form-select-sm"
+                          value={customerForm.state_code}
+                          onChange={(event) => handleCustomerStateChange(event.target.value)}
+                          disabled={!isIndianCountry(customerForm.country)}
+                        >
+                          <option value="">Select state</option>
+                          {INDIAN_STATES.filter((state) => Number(state.code) < 90).map((state) => (
+                            <option key={state.code} value={state.code}>{state.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="col-6 col-md-4">
+                        <label className="form-label small fw-medium">State Code</label>
+                        <input className="form-control form-control-sm" value={customerForm.state_code} readOnly />
+                      </div>
+                      <div className="col-12">
+                        <label className="form-label small fw-medium">Billing Address *</label>
+                        <textarea
+                          className="form-control form-control-sm"
+                          rows={2}
+                          value={customerForm.billing_address}
+                          onChange={(event) => setCustomerForm({ ...customerForm, billing_address: event.target.value })}
+                          required
+                        />
+                      </div>
+                      <div className="col-12">
+                        <label className="form-label small fw-medium">Shipping Address</label>
+                        <textarea
+                          className="form-control form-control-sm"
+                          rows={2}
+                          value={customerForm.shipping_address}
+                          onChange={(event) => setCustomerForm({ ...customerForm, shipping_address: event.target.value })}
+                          placeholder="Leave blank to reuse the billing address"
+                        />
                       </div>
                     </div>
                   </div>
+
                   <div className="modal-footer">
-                    <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => setShowAddCustomer(false)}>Cancel</button>
-                    <button type="submit" className="btn btn-sm btn-success" disabled={savingCust}>
-                      {savingCust ? <><span className="spinner-border spinner-border-sm me-1" />Saving…</> : <><i className="fa-solid fa-check me-1"></i>Create & Select</>}
+                    <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => setShowAddCustomer(false)}>
+                      Cancel
+                    </button>
+                    <button type="submit" className="btn btn-sm btn-success" disabled={savingCustomer}>
+                      {savingCustomer ? (
+                        <>
+                          <span className="spinner-border spinner-border-sm me-1" />
+                          Saving...
+                        </>
+                      ) : (
+                        <>
+                          <i className="fa-solid fa-check me-1" />
+                          {customerEditMode ? "Update" : "Create & Select"}
+                        </>
+                      )}
                     </button>
                   </div>
                 </form>
@@ -810,128 +1291,18 @@ export default function InvoiceForm() {
           </div>
         </>
       )}
-    </div>
-  );
-}
 
-
-
-
-function InvoiceItemRow({
-  item, idx, hasTax, productOptions,
-  errors, onProductChange, onFieldChange, onRemove, canRemove,
-}) {
-  const selectedProduct = item.product_id
-    ? productOptions.find(o => o.value === item.product_id) || null
-    : null;
-
-  return (
-    <tr>
-      {}
-      <td className="text-center text-muted small">{idx + 1}</td>
-
-      {}
-      <td>
-        <Select
-          options={productOptions}
-          value={selectedProduct}
-          onChange={onProductChange}
-          menuPortalTarget={document.body}
-          styles={{
-            menuPortal: base => ({ ...base, zIndex: 9999 }),
-            ...selectStyles,
-            control: (base, state) => ({
-              ...selectStyles.control(base, state),
-              minHeight: "31px",
-              height: "31px",
-            }),
-            valueContainer: (base) => ({ ...base, padding: "0 6px" }),
-            indicatorsContainer: (base) => ({ ...base, height: "31px" }),
+      {showScanner && (
+        <BarcodeScanner
+          show={showScanner}
+          onClose={() => {
+            setShowScanner(false);
+            setScanResult(null);
           }}
-          placeholder="Search product…"
-          isClearable
-          filterOption={(opt, input) =>
-            opt.label.toLowerCase().includes(input.toLowerCase())
-          }
-          noOptionsMessage={() => "No products"}
+          onScan={handleScan}
+          lastResult={scanResult}
         />
-        {errors[`item_${idx}_product`] && (
-          <div className="text-danger mt-1" style={{ fontSize: "0.7rem" }}>
-            {errors[`item_${idx}_product`]}
-          </div>
-        )}
-        {}
-        {item.product?.current_stock !== undefined && (
-          <small className={`d-block mt-1 ${item.product.current_stock < 5 ? "text-warning" : "text-muted"}`} style={{ fontSize: "0.68rem" }}>
-            <i className="fa-solid fa-boxes-stacked fa-xs me-1"></i>
-            Stock: {item.product.current_stock} {item.product?.unit}
-          </small>
-        )}
-      </td>
-
-      {}
-      <td>
-        <input
-          type="number"
-          className={`form-control form-control-sm text-end ${errors[`item_${idx}_rate`] ? "is-invalid" : ""}`}
-          value={item.rate}
-          onChange={e => onFieldChange("rate", e.target.value)}
-          min="0"
-          step="0.01"
-          placeholder="0.00"
-        />
-        {errors[`item_${idx}_rate`] && (
-          <div className="invalid-feedback" style={{ fontSize: "0.7rem" }}>{errors[`item_${idx}_rate`]}</div>
-        )}
-      </td>
-
-      {}
-      <td>
-        <input
-          type="number"
-          className={`form-control form-control-sm text-end ${errors[`item_${idx}_quantity`] ? "is-invalid" : ""}`}
-          value={item.quantity}
-          onChange={e => onFieldChange("quantity", e.target.value)}
-          min="0"
-          step="0.001"
-          placeholder="0"
-        />
-        {errors[`item_${idx}_quantity`] && (
-          <div className="invalid-feedback" style={{ fontSize: "0.7rem" }}>{errors[`item_${idx}_quantity`]}</div>
-        )}
-      </td>
-
-      {}
-      <td className="text-end small">{formatCurrency(item.value)}</td>
-
-      {}
-      {hasTax && (
-        <td className="text-center small text-muted">
-          {item.taxRate > 0 ? `${item.taxRate}%` : "—"}
-        </td>
       )}
-
-      {}
-      {hasTax && (
-        <td className="text-end small">{item.taxRate > 0 ? formatCurrency(item.taxValue) : "—"}</td>
-      )}
-
-      {}
-      <td className="text-end fw-semibold small">{formatCurrency(item.totalValue)}</td>
-
-      {}
-      <td className="text-center">
-        <button
-          type="button"
-          className="btn btn-link btn-sm p-0 text-danger"
-          onClick={onRemove}
-          disabled={!canRemove}
-          title="Remove row"
-          style={{ opacity: canRemove ? 1 : 0.3 }}
-        >
-          <i className="fa-solid fa-trash-can"></i>
-        </button>
-      </td>
-    </tr>
+    </div>
   );
 }

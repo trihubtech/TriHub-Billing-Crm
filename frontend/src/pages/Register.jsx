@@ -5,7 +5,6 @@ import BrandLogo from "../../components/shared/BrandLogo";
 import GoogleAuthButton from "../../components/auth/GoogleAuthButton";
 import api from "../../utils/api";
 import { toast } from "react-toastify";
-import { INDIAN_STATES, isIndianCountry } from "../../utils/gst";
 
 const PROMO_ITEMS = [
   {
@@ -28,9 +27,6 @@ export default function Register() {
   const [form, setForm] = useState({
     name: "",
     company_name: "",
-    country: "India",
-    state_name: "",
-    state_code: "",
     password: "",
     confirmPassword: "",
   });
@@ -76,34 +72,6 @@ export default function Register() {
     toast.success("Email verified via Google! Complete the form and submit.");
   };
 
-  const handleCountryChange = (value) => {
-    if (isIndianCountry(value)) {
-      setForm((current) => ({
-        ...current,
-        country: "India",
-        state_name: "",
-        state_code: "",
-      }));
-      return;
-    }
-
-    setForm((current) => ({
-      ...current,
-      country: value,
-      state_name: "",
-      state_code: "",
-    }));
-  };
-
-  const handleStateChange = (stateCode) => {
-    const state = INDIAN_STATES.find((item) => item.code === stateCode);
-    setForm((current) => ({
-      ...current,
-      state_code: state?.code || "",
-      state_name: state?.name || "",
-    }));
-  };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
 
@@ -119,21 +87,6 @@ export default function Register() {
 
     if (!form.company_name.trim()) {
       toast.error("Please enter your company name");
-      return;
-    }
-
-    if (!form.country.trim()) {
-      toast.error("Please enter your company country");
-      return;
-    }
-
-    if (isIndianCountry(form.country) && !form.state_code) {
-      toast.error("Please select your company state");
-      return;
-    }
-
-    if (!isIndianCountry(form.country) && !form.state_name.trim()) {
-      toast.error("Please enter your company state / region");
       return;
     }
 
@@ -156,9 +109,6 @@ export default function Register() {
         credential: googleCredential,
         name: form.name,
         company_name: form.company_name,
-        country: form.country,
-        state_name: form.state_name,
-        state_code: form.state_code,
         password: form.password,
       });
       handleAuthSuccess(res);
@@ -326,46 +276,6 @@ export default function Register() {
                     autoFocus
                     id="register-company"
                   />
-                </div>
-
-                <div className="row g-3">
-                  <div className="col-12 col-md-6">
-                    <label className="form-label fw-medium small">
-                      <i className="fa-solid fa-earth-asia me-1"></i>Country
-                    </label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      placeholder="Country"
-                      value={form.country}
-                      onChange={(e) => handleCountryChange(e.target.value)}
-                    />
-                  </div>
-                  <div className="col-12 col-md-6">
-                    <label className="form-label fw-medium small">
-                      <i className="fa-solid fa-location-dot me-1"></i>{isIndianCountry(form.country) ? "State" : "State / Region"}
-                    </label>
-                    {isIndianCountry(form.country) ? (
-                      <select
-                        className="form-select"
-                        value={form.state_code}
-                        onChange={(e) => handleStateChange(e.target.value)}
-                      >
-                        <option value="">Select state</option>
-                        {INDIAN_STATES.filter((state) => Number(state.code) <= 38).map((state) => (
-                          <option key={state.code} value={state.code}>{state.name}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input
-                        type="text"
-                        className="form-control"
-                        placeholder="State / Region"
-                        value={form.state_name}
-                        onChange={(e) => setForm({ ...form, state_name: e.target.value, state_code: "" })}
-                      />
-                    )}
-                  </div>
                 </div>
 
                 <div className="mb-3">

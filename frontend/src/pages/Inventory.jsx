@@ -6,6 +6,7 @@ import DataTable from "../components/shared/DataTable";
 import api from "../utils/api";
 import { useAuth } from "../context/AuthContext";
 import { hasPermission } from "../utils/permissions";
+import { formatIndiaDate } from "../utils/time";
 
 export default function Inventory() {
   const { user } = useAuth();
@@ -86,7 +87,7 @@ export default function Inventory() {
 
   const columns = [
     { key: "code", label: "Code", style: { width: "90px" }, render: (row) => <span className="fw-medium">{row.code}</span> },
-    { key: "date", label: "Date", style: { width: "100px" }, render: (row) => new Date(row.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) },
+    { key: "date", label: "Date", style: { width: "100px" }, render: (row) => formatIndiaDate(row.date, { year: undefined }) },
     { key: "product_name", label: "Product", render: (row) => <><div className="fw-medium">{row.product_name}</div><small className="text-muted">{row.product_code}</small></> },
     { key: "type", label: "Type", style: { width: "110px" }, render: (row) => <span className={`badge bg-${typeColors[row.type] || "secondary"} bg-opacity-10 text-${typeColors[row.type] || "secondary"}`} style={{ fontSize: "0.7rem" }}>{row.type.replace("_", " ")}</span> },
     { key: "adjustment", label: "Adj", style: { width: "70px" }, cellClassName: "text-end", render: (row) => <span className={row.adjustment > 0 ? "text-success" : "text-danger"}>{row.adjustment > 0 ? "+" : ""}{row.adjustment}</span> },
