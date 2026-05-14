@@ -37,7 +37,7 @@ app.use(morgan("dev"));
 
 const uploadsDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-app.use("/uploads", requireAuth, express.static(uploadsDir));
+app.use("/uploads", express.static(uploadsDir));
 
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/subscription", require("./routes/subscription"));
