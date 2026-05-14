@@ -16,7 +16,7 @@ function validationErrors(req, res) {
   return null;
 }
 
-const paymentUploadsDir = "/var/www/trihub-uploads";
+const paymentUploadsDir = "/var/www/trihub-uploads/payments";
 
 function ensurePaymentsDir() {
   if (!fs.existsSync(paymentUploadsDir)) {
@@ -59,9 +59,11 @@ function cleanOptional(value) {
 function removeStoredFile(relativePath) {
   if (!relativePath) return;
 
-  const uploadsRoot = path.resolve(path.join(__dirname, "../uploads"));
-  const absolutePath = path.resolve(path.join(__dirname, "..", relativePath.replace(/^\/+/, "")));
-  if (absolutePath.startsWith(uploadsRoot) && fs.existsSync(absolutePath)) {
+  const uploadsRoot = "/var/www/trihub-uploads";
+  const cleanedPath = relativePath.replace(/^\/uploads\//, "");
+  const absolutePath = path.join(uploadsRoot, cleanedPath);
+
+  if (fs.existsSync(absolutePath)) {
     fs.unlinkSync(absolutePath);
   }
 }
