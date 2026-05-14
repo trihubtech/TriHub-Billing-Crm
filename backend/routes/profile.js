@@ -26,7 +26,7 @@ function validationErrors(req, res) {
   return null;
 }
 
-const profileUploadsDir = "/var/www/trihub-uploads/profiles";
+const profileUploadsDir = path.join(__dirname, "../uploads/profiles");
 
 function ensureProfileUploadDir() {
   if (!fs.existsSync(profileUploadsDir)) {
@@ -129,11 +129,11 @@ function toUploadPath(fileName) {
 function resolveUploadPath(relativePath) {
   if (!relativePath) return null;
 
-  const uploadsRoot = "/var/www/trihub-uploads";
-  const cleanedPath = relativePath.replace(/^\/uploads\//, "");
-  const absolutePath = path.join(uploadsRoot, cleanedPath);
+  const uploadsRoot = path.resolve(path.join(__dirname, "../uploads"));
+  const cleanedPath = relativePath.replace(/^\/+/, "");
+  const absolutePath = path.resolve(path.join(__dirname, "..", cleanedPath));
 
-  return absolutePath;
+  return absolutePath.startsWith(uploadsRoot) ? absolutePath : null;
 }
 
 function getStoredFileSize(relativePath) {
