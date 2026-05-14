@@ -1,13 +1,6 @@
 import { useState, useEffect } from "react";
 
-export default function AuthImage({
-  src,
-  fallbackIcon,
-  alt = "Image",
-  className = "",
-  style = {},
-  ...props
-}) {
+export default function AuthImage({ src, fallbackIcon, alt = "Image", className = "", style = {}, ...props }) {
   const [imgSrc, setImgSrc] = useState(null);
   const [error, setError] = useState(false);
 
@@ -18,16 +11,41 @@ export default function AuthImage({
       return;
     }
 
+    
+    if (src.startsWith("http") || src.startsWith("data:")) {
+      setImgSrc(src);
+      setError(false);
+      return;
+    }
+
+    const token = localStorage.getItem("trihub_token");
     const baseUrl = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
+    const fetchUrl = src.startsWith("http") ? src : `${baseUrl}${src}`;
 
-    // Full image URL
-    const finalUrl =
-      src.startsWith("http") || src.startsWith("data:")
-        ? src
-        : `${baseUrl}${src}`;
+    fetch(fetchUrl, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to load image");
+        return res.blob();
+      })
+      .then((blob) => {
+        const objectUrl = URL.createObjectURL(blob);
+        setImgSrc(objectUrl);
+        setError(false);
+      })
+      .catch(() => {
+        setImgSrc(null);
+        setError(true);
+      });
 
-    setImgSrc(finalUrl);
-    setError(false);
+    
+    return () => {
+      if (imgSrc && imgSrc.startsWith("blob:")) {
+        URL.revokeObjectURL(imgSrc);
+      }
+    };
+    
   }, [src]);
 
   if (error || !imgSrc) {
@@ -42,18 +60,8 @@ export default function AuthImage({
         </div>
       );
     }
-
-    return null;
+    return null; 
   }
 
-  return (
-    <img
-      src={imgSrc}
-      alt={alt}
-      className={className}
-      style={style}
-      onError={() => setError(true)}
-      {...props}
-    />
-  );
+  return <img src={imgSrc} alt={alt} className={className} style={style} {...props} />;
 }
