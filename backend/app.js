@@ -35,7 +35,7 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use(morgan("dev"));
 
-const uploadsDir = path.join(__dirname, "uploads");
+const uploadsDir = "/var/www/trihub-uploads";
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use("/uploads", requireAuth, express.static(uploadsDir));
 

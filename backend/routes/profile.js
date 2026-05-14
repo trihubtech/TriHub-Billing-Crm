@@ -26,7 +26,7 @@ function validationErrors(req, res) {
   return null;
 }
 
-const profileUploadsDir = path.join(__dirname, "../uploads/profiles");
+const profileUploadsDir = "/var/www/trihub-uploads/profiles";
 
 function ensureProfileUploadDir() {
   if (!fs.existsSync(profileUploadsDir)) {

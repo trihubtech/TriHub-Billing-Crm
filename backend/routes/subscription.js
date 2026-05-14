@@ -16,7 +16,7 @@ function validationErrors(req, res) {
   return null;
 }
 
-const paymentUploadsDir = path.join(__dirname, "../uploads/payments");
+const paymentUploadsDir = "/var/www/trihub-uploads/payments";
 
 function ensurePaymentsDir() {
   if (!fs.existsSync(paymentUploadsDir)) {
