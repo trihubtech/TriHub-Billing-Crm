@@ -531,7 +531,7 @@ router.post(
     }
 
     const conn = await pool.getConnection();
-    const newPath = `/uploads/platform/${req.file.filename}`;
+    const newPath = `/api/uploads/platform/${req.file.filename}`;
 
     try {
       await conn.beginTransaction();

@@ -152,12 +152,12 @@ router.post(
   async (req, res, next) => {
     const err = validationErrors(req, res);
     if (err) {
-      if (req.file) removeStoredFile(`/uploads/payments/${req.file.filename}`);
+      if (req.file) removeStoredFile(`/api/uploads/payments/${req.file.filename}`);
       return;
     }
 
     const conn = await pool.getConnection();
-    const screenshotPath = req.file ? `/uploads/payments/${req.file.filename}` : null;
+    const screenshotPath = req.file ? `/api/uploads/payments/${req.file.filename}` : null;
 
     try {
       await conn.beginTransaction();
