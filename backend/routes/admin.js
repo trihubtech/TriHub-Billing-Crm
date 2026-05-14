@@ -8,7 +8,7 @@ const { requirePlatformAdmin } = require("../middleware/adminAuth");
 const { activateSubscription, suspendSubscription } = require("../utils/subscriptions");
 
 
-const qrUploadsDir = "/var/www/trihub-uploads/platform";
+const qrUploadsDir = "/var/www/trihub-uploads";
 
 function ensurePlatformDir() {
   if (!fs.existsSync(qrUploadsDir)) {

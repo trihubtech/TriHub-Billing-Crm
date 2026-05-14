@@ -26,7 +26,7 @@ function validationErrors(req, res) {
   return null;
 }
 
-const profileUploadsDir = "/var/www/trihub-uploads/profiles";
+const profileUploadsDir = "/var/www/trihub-uploads";
 
 function ensureProfileUploadDir() {
   if (!fs.existsSync(profileUploadsDir)) {

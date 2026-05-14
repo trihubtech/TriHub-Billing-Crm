@@ -16,7 +16,7 @@ function validationErrors(req, res) {
   return null;
 }
 
-const paymentUploadsDir = "/var/www/trihub-uploads/payments";
+const paymentUploadsDir = "/var/www/trihub-uploads";
 
 function ensurePaymentsDir() {
   if (!fs.existsSync(paymentUploadsDir)) {
