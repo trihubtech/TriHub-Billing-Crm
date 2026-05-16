@@ -123,7 +123,7 @@ function resolveCompanyTaxRegion(payload) {
 }
 
 function toUploadPath(fileName) {
-  return `/uploads/profiles/${fileName}`;
+  return `/api/uploads/profiles/${fileName}`;
 }
 
 function resolveUploadPath(relativePath) {
