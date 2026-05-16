@@ -444,7 +444,7 @@ export default function BillPrint() {
         </div>
 
         <div className="inv-branding">
-          Trihub Technologies CRM
+          trihubtechnologies.com
         </div>
       </div>
 

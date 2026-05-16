@@ -123,7 +123,7 @@ function resolveCompanyTaxRegion(payload) {
 }
 
 function toUploadPath(fileName) {
-  return `/api/uploads/profiles/${fileName}`;
+  return `/uploads/profiles/${fileName}`;
 }
 
 function resolveUploadPath(relativePath) {
@@ -482,109 +482,7 @@ router.put(
   }
 );
 
-router.post("/company/upi-qr", upload.single("upi_qr_image"), async (req, res, next) => {
-  if (!ensureCompanyManager(req, res)) return;
 
-  if (!req.file) {
-    return res.status(400).json({ ok: false, error: "UPI QR image is required" });
-  }
-
-  const conn = await pool.getConnection();
-  const uploadedQrPath = toUploadPath(req.file.filename);
-
-  try {
-    await ensureCompanyProfileSchemaCompatibility(conn);
-    await conn.beginTransaction();
-
-    const existing = await loadCompanyProfile(conn, req.user.company_id);
-    if (!existing) {
-      await conn.rollback();
-      removeStoredFile(uploadedQrPath);
-      return res.status(404).json({ ok: false, error: "Company profile not found" });
-    }
-
-    const storageDelta = req.file.size - getStoredFileSize(existing.upi_qr_image);
-
-    await conn.execute(
-      "UPDATE company_profiles SET upi_qr_image = ? WHERE company_id = ?",
-      [uploadedQrPath, req.user.company_id]
-    );
-    await updateStorageUsed(conn, req.user.company_id, storageDelta);
-
-    await logActivity(conn, {
-      userId: req.authUserId || req.user.member_id,
-      type: "COMPANY_UPI_QR_UPDATED",
-      description: "Company UPI QR image updated.",
-    });
-
-    await conn.commit();
-
-    if (existing.upi_qr_image && existing.upi_qr_image !== uploadedQrPath) {
-      removeStoredFile(existing.upi_qr_image);
-    }
-
-    const updatedCompany = await loadCompanyProfile(pool, req.user.company_id);
-    return res.json({
-      ok: true,
-      message: "UPI QR image uploaded successfully",
-      data: updatedCompany,
-    });
-  } catch (error) {
-    await conn.rollback();
-    removeStoredFile(uploadedQrPath);
-    next(error);
-  } finally {
-    conn.release();
-  }
-});
-
-router.delete("/company/upi-qr", async (req, res, next) => {
-  if (!ensureCompanyManager(req, res)) return;
-
-  const conn = await pool.getConnection();
-
-  try {
-    await ensureCompanyProfileSchemaCompatibility(conn);
-    await conn.beginTransaction();
-
-    const existing = await loadCompanyProfile(conn, req.user.company_id);
-    if (!existing?.upi_qr_image) {
-      await conn.rollback();
-      return res.status(404).json({ ok: false, error: "No uploaded UPI QR image found" });
-    }
-
-    const previousPath = existing.upi_qr_image;
-    const storageDelta = -getStoredFileSize(previousPath);
-
-    await conn.execute(
-      "UPDATE company_profiles SET upi_qr_image = NULL WHERE company_id = ?",
-      [req.user.company_id]
-    );
-    await updateStorageUsed(conn, req.user.company_id, storageDelta);
-
-    await logActivity(conn, {
-      userId: req.authUserId || req.user.member_id,
-      type: "COMPANY_UPI_QR_REMOVED",
-      description: "Company UPI QR image removed.",
-    });
-
-    await conn.commit();
-
-    removeStoredFile(previousPath);
-
-    const updatedCompany = await loadCompanyProfile(pool, req.user.company_id);
-    return res.json({
-      ok: true,
-      message: "UPI QR image removed successfully",
-      data: updatedCompany,
-    });
-  } catch (error) {
-    await conn.rollback();
-    next(error);
-  } finally {
-    conn.release();
-  }
-});
 
 router.post("/company/signature", upload.single("authorized_signature"), async (req, res, next) => {
   if (!ensureCompanyManager(req, res)) return;

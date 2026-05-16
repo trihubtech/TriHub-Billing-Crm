@@ -11,7 +11,6 @@ import {
   GST_RATE_OPTIONS,
   INDIAN_STATES,
   calculateInvoicePreview,
-  calcExclusiveRate,
   createInvoiceItemDraft,
   deriveStateFromGstin,
   findStateByCode,
@@ -130,8 +129,11 @@ export default function InvoiceForm() {
     const rate = round2(Number(item.rate) || 0);
     const qty = round2(Number(item.quantity) || 0);
     const taxRate = round2(Number(item.taxRate) || 0);
-    const exclusiveRate = calcExclusiveRate(rate, taxRate, priceIncludesGst);
-    return sum + round2(exclusiveRate * qty);
+    if (priceIncludesGst && taxRate > 0) {
+      const grossValue = round2(rate * qty);
+      return sum + round2(grossValue / (1 + taxRate / 100));
+    }
+    return sum + round2(rate * qty);
   }, 0);
   const discountAmount = discountType === "PERCENTAGE"
     ? round2(rawSubTotal * (Number(discountInput) || 0) / 100)
@@ -479,7 +481,14 @@ export default function InvoiceForm() {
       if (!item.product_id) nextErrors[`item_${index}_product`] = "Select a product";
       if (item.taxRate === "" || Number(item.taxRate) < 0) nextErrors[`item_${index}_tax`] = "Enter GST";
       if (!item.rate || Number(item.rate) <= 0) nextErrors[`item_${index}_rate`] = "Enter a valid rate";
-      if (!item.quantity || Number(item.quantity) <= 0) nextErrors[`item_${index}_quantity`] = "Enter a valid quantity";
+      if (!item.quantity || Number(item.quantity) <= 0) {
+        nextErrors[`item_${index}_quantity`] = "Enter a valid quantity";
+      } else {
+        const product = item.product || productOptions.find((o) => o.value === item.product_id)?.data;
+        if (product && product.current_stock != null && Number(item.quantity) > Number(product.current_stock)) {
+          nextErrors[`item_${index}_quantity`] = `Exceeds stock (${product.current_stock})`;
+        }
+      }
     });
 
     return nextErrors;
@@ -781,9 +790,13 @@ export default function InvoiceForm() {
                             isClearable
                             filterOption={(option, input) => option.label.toLowerCase().includes(input.toLowerCase())}
                           />
-                          {errors[`item_${index}_product`] && (
+                          {errors[`item_${index}_product`] ? (
                             <div className="text-danger mt-1" style={{ fontSize: "0.7rem" }}>{errors[`item_${index}_product`]}</div>
-                          )}
+                          ) : selectedProduct?.data?.current_stock != null ? (
+                            <div className={`mt-1 fw-medium ${Number(selectedProduct.data.current_stock) < Number(item.quantity) ? 'text-danger' : 'text-success'}`} style={{ fontSize: "0.7rem" }}>
+                              Stock: {selectedProduct.data.current_stock}
+                            </div>
+                          ) : null}
                         </td>
                         <td>
                           <input
@@ -824,6 +837,11 @@ export default function InvoiceForm() {
                             min="0"
                             step="0.001"
                           />
+                          {errors[`item_${index}_quantity`] && (
+                            <div className="text-danger mt-1 text-end" style={{ fontSize: "0.7rem", whiteSpace: "nowrap" }}>
+                              {errors[`item_${index}_quantity`]}
+                            </div>
+                          )}
                         </td>
                         <td className="text-end small">{formatCurrency(previewItem?.taxableValue)}</td>
                         <td className="text-end small">
@@ -887,9 +905,13 @@ export default function InvoiceForm() {
                         placeholder="Search product..."
                         isClearable
                       />
-                      {errors[`item_${index}_product`] && (
+                      {errors[`item_${index}_product`] ? (
                         <div className="text-danger mt-1" style={{ fontSize: "0.7rem" }}>{errors[`item_${index}_product`]}</div>
-                      )}
+                      ) : selectedProduct?.data?.current_stock != null ? (
+                        <div className={`mt-1 fw-medium ${Number(selectedProduct.data.current_stock) < Number(item.quantity) ? 'text-danger' : 'text-success'}`} style={{ fontSize: "0.7rem" }}>
+                          Stock: {selectedProduct.data.current_stock}
+                        </div>
+                      ) : null}
                     </div>
 
                     <div className="row g-2 mb-3">
@@ -939,6 +961,11 @@ export default function InvoiceForm() {
                           min="0"
                           step="0.001"
                         />
+                        {errors[`item_${index}_quantity`] && (
+                          <div className="text-danger mt-1 text-end" style={{ fontSize: "0.7rem" }}>
+                            {errors[`item_${index}_quantity`]}
+                          </div>
+                        )}
                       </div>
                     </div>
 

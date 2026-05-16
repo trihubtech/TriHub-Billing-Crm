@@ -386,7 +386,6 @@ export default function Team() {
                     onChange={(event) => setForm({ ...form, role: event.target.value, permissions: [] })}
                   >
                     <option value="NORMAL">Normal User</option>
-                    <option value="ADMIN">Admin</option>
                   </select>
                 </div>
 

@@ -230,7 +230,7 @@ export default function InvoicePrint() {
           </div>
 
           <div className="inv-header-right">
-            <div className="inv-title">TAX INVOICE</div>
+            <div className="inv-title">INVOICE</div>
             <table className="inv-meta-table">
               <tbody>
                 <tr>
@@ -377,14 +377,10 @@ export default function InvoicePrint() {
               </div>
             )}
 
-            {hasBalanceDue && (company?.upi_qr_image || upiUri) && (
+            {hasBalanceDue && upiUri && (
               <div className="inv-note-block inv-payment-block">
                 <div className="inv-panel-title">Pay Balance</div>
-                {company?.upi_qr_image ? (
-                  <AuthImage src={company.upi_qr_image} alt="UPI QR" className="inv-qr-image" />
-                ) : (
-                  <QRCodeSVG value={upiUri} size={120} includeMargin={false} className="inv-qr-image" />
-                )}
+                <QRCodeSVG value={upiUri} size={120} includeMargin={false} className="inv-qr-image" />
                 <div className="inv-panel-text fw-medium">Outstanding: ₹ {formatCurrency(Math.abs(totals.balance))}</div>
                 {company?.upi_id && <div className="inv-panel-text">{company.upi_id}</div>}
               </div>
@@ -457,7 +453,7 @@ export default function InvoicePrint() {
         </div>
 
         <div className="inv-branding">
-          Trihub Technologies CRM
+          trihubtechnologies.com
         </div>
       </div>
 

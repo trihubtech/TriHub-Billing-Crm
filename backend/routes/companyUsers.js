@@ -83,7 +83,7 @@ router.post(
   [
     body("name").trim().notEmpty().withMessage("Name is required"),
     body("email").isEmail().normalizeEmail().withMessage("Valid email is required"),
-    body("role").isIn(["ADMIN", "NORMAL"]).withMessage("Role must be ADMIN or NORMAL"),
+    body("role").isIn(["NORMAL"]).withMessage("Role must be NORMAL"),
     body("permissions").optional().isArray().withMessage("Permissions must be an array"),
     body("temporary_password")
       .isStrongPassword({

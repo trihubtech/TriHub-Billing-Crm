@@ -95,11 +95,8 @@ export default function Profile() {
     terms_and_conditions: "",
   });
   const [logo, setLogo] = useState(null);
-  const [upiQrFile, setUpiQrFile] = useState(null);
   const [signatureFile, setSignatureFile] = useState(null);
   const [savingCompany, setSavingCompany] = useState(false);
-  const [uploadingUpiQr, setUploadingUpiQr] = useState(false);
-  const [removingUpiQr, setRemovingUpiQr] = useState(false);
   const [uploadingSignature, setUploadingSignature] = useState(false);
   const [removingSignature, setRemovingSignature] = useState(false);
 
@@ -223,41 +220,7 @@ export default function Profile() {
     }));
   };
 
-  const handleUploadUpiQr = async () => {
-    if (!upiQrFile) {
-      toast.error("Choose a UPI QR image first");
-      return;
-    }
 
-    setUploadingUpiQr(true);
-    try {
-      const formData = new FormData();
-      formData.append("upi_qr_image", upiQrFile);
-      const res = await api.post("/profile/company/upi-qr", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-      updateCompany(res.data.data || {});
-      setUpiQrFile(null);
-      toast.success("UPI QR image uploaded");
-    } catch (error) {
-      toast.error(error.response?.data?.error || "Failed to upload UPI QR image");
-    } finally {
-      setUploadingUpiQr(false);
-    }
-  };
-
-  const handleRemoveUpiQr = async () => {
-    setRemovingUpiQr(true);
-    try {
-      const res = await api.delete("/profile/company/upi-qr");
-      updateCompany(res.data.data || {});
-      toast.success("UPI QR image removed");
-    } catch (error) {
-      toast.error(error.response?.data?.error || "Failed to remove UPI QR image");
-    } finally {
-      setRemovingUpiQr(false);
-    }
-  };
 
   const handleUploadSignature = async () => {
     if (!signatureFile) {
@@ -633,53 +596,7 @@ export default function Profile() {
                       onChange={(event) => setCompanyForm({ ...companyForm, upi_name: event.target.value })}
                     />
                   </div>
-                  <div className="col-12 col-md-6">
-                    <label className="form-label small fw-medium">Upload UPI QR Image</label>
-                    <input
-                      type="file"
-                      className="form-control form-control-sm"
-                      accept="image/*"
-                      onChange={(event) => setUpiQrFile(event.target.files?.[0] || null)}
-                    />
-                    <div className="d-flex flex-wrap gap-2 mt-2">
-                      <button
-                        type="button"
-                        className="btn btn-outline-primary btn-sm"
-                        onClick={handleUploadUpiQr}
-                        disabled={!upiQrFile || uploadingUpiQr}
-                      >
-                        {uploadingUpiQr ? "Uploading..." : "Upload UPI QR"}
-                      </button>
-                      {company?.upi_qr_image && (
-                        <button
-                          type="button"
-                          className="btn btn-outline-danger btn-sm"
-                          onClick={handleRemoveUpiQr}
-                          disabled={removingUpiQr}
-                        >
-                          {removingUpiQr ? "Removing..." : "Remove"}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  <div className="col-12 col-md-6">
-                    <label className="form-label small fw-medium">Current QR Preview</label>
-                    <div className="profile-qr-preview">
-                      {company?.upi_qr_image ? (
-                        <AuthImage
-                          src={company.upi_qr_image}
-                          alt="UPI QR"
-                          className="img-fluid rounded"
-                          style={{ maxHeight: 200 }}
-                        />
-                      ) : (
-                        <span className="text-muted small">No UPI QR uploaded yet</span>
-                      )}
-                    </div>
-                    <div className="small text-muted mt-2">
-                      Storage used: {formatStorageUsed(company?.storage_used_bytes)}
-                    </div>
-                  </div>
+
                   <div className="col-12">
                     <hr className="my-1" />
                     <small className="text-muted fw-bold">Authorised Signature (for Invoice, Bill, and GST Document)</small>

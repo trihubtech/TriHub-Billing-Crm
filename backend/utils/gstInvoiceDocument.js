@@ -447,18 +447,13 @@ function buildGstInvoiceSpreadsheet(document) {
     ]),
     buildSpreadsheetRow([cell("", { styleId: "s_spacer", mergeAcross: 14 })], { height: 8 }),
     buildSpreadsheetRow([
-      cell("TERMS & CONDITIONS", { styleId: "s_sechead", mergeAcross: 9 }),
-      cell(`FOR ${document.company.name.toUpperCase()}`, { styleId: "s_sechead", mergeAcross: 4 }),
+      cell("TERMS & CONDITIONS", { styleId: "s_sechead", mergeAcross: 14 }),
     ]),
   );
 
   const termsToRender = document.terms.length ? document.terms : [""];
-  const signMergeDown = Math.max(termsToRender.length - 1, 0);
-  termsToRender.forEach((term, idx) => {
-    const cells = [cell(term || "", { styleId: "s_terms", mergeAcross: 9 })];
-    if (idx === 0) {
-      cells.push(`<Cell ss:MergeAcross="4" ss:MergeDown="${signMergeDown}" ss:StyleID="s_sign"><Data ss:Type="String">Authorized Signatory</Data></Cell>`);
-    }
+  termsToRender.forEach((term) => {
+    const cells = [cell(term || "", { styleId: "s_terms", mergeAcross: 14 })];
     rows.push(buildSpreadsheetRow(cells));
   });
 

@@ -208,8 +208,18 @@ function calculateInvoiceTaxes({
     const rate = round2(item.rate);
     const quantity = round2(item.quantity);
     const gstRate = round2(item.gstRate);
-    const exclusiveRate = calcExclusiveRate(rate, gstRate, priceIncludesGst);
-    const baseValue = round2(exclusiveRate * quantity);
+
+    let exclusiveRate, baseValue, grossValue;
+
+    if (priceIncludesGst && gstRate > 0) {
+      grossValue = round2(rate * quantity);
+      baseValue = round2(grossValue / (1 + gstRate / 100));
+      exclusiveRate = round2(rate / (1 + gstRate / 100));
+    } else {
+      exclusiveRate = rate;
+      baseValue = round2(exclusiveRate * quantity);
+      grossValue = baseValue;
+    }
 
     return {
       ...item,
@@ -218,6 +228,7 @@ function calculateInvoiceTaxes({
       gstRate,
       exclusiveRate,
       baseValue,
+      grossValue,
     };
   });
 
@@ -236,18 +247,19 @@ function calculateInvoiceTaxes({
     let totalValue = 0;
 
     if (priceIncludesGst) {
-      // If price includes GST, we assume the discount is on the gross price.
-      // However, for consistency with exclusive logic, we apply the allocated discount to the derived base.
-      taxValue = round2(taxableValue * (item.gstRate / 100)); // This is simple exclusive-style tax on net taxable
-      // Wait, if price includes GST, the totalValue should be (rate * quantity) - (discount on gross).
-      // Let's stick to the allocated discount on base value for consistency.
+      if (discountValue <= 0) {
+        totalValue = item.grossValue;
+        taxValue = round2(totalValue - taxableValue);
+      } else {
+        totalValue = round2(taxableValue * (1 + item.gstRate / 100));
+        taxValue = round2(totalValue - taxableValue);
+      }
       if (igstRate > 0) {
         igstAmount = taxValue;
       } else if (cgstRate > 0 && sgstRate > 0) {
         cgstAmount = round2(taxValue / 2);
         sgstAmount = round2(taxValue - cgstAmount);
       }
-      totalValue = round2(taxableValue + taxValue);
     } else {
       cgstAmount = round2(taxableValue * (cgstRate / 100));
       sgstAmount = round2(taxableValue * (sgstRate / 100));

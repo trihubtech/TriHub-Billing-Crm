@@ -10,7 +10,6 @@ import {
   GST_RATE_OPTIONS,
   INDIAN_STATES,
   calculateInvoicePreview,
-  calcExclusiveRate,
   createInvoiceItemDraft,
   deriveStateFromGstin,
   findStateByCode,
@@ -124,8 +123,11 @@ export default function BillForm() {
     const rate = round2(Number(item.rate) || 0);
     const qty = round2(Number(item.quantity) || 0);
     const taxRate = round2(Number(item.taxRate) || 0);
-    const exclusiveRate = calcExclusiveRate(rate, taxRate, priceIncludesGst);
-    return sum + round2(exclusiveRate * qty);
+    if (priceIncludesGst && taxRate > 0) {
+      const grossValue = round2(rate * qty);
+      return sum + round2(grossValue / (1 + taxRate / 100));
+    }
+    return sum + round2(rate * qty);
   }, 0);
   const discountAmount = discountType === "PERCENTAGE"
     ? round2(rawSubTotal * (Number(discountInput) || 0) / 100)
@@ -735,6 +737,11 @@ export default function BillForm() {
                           {errors[`item_${index}_product`] && (
                             <div className="text-danger mt-1" style={{ fontSize: "0.7rem" }}>{errors[`item_${index}_product`]}</div>
                           )}
+                          {selectedProduct?.data?.current_stock != null && (
+                            <div className="mt-1 fw-medium text-muted" style={{ fontSize: "0.7rem" }}>
+                              Stock: {selectedProduct.data.current_stock}
+                            </div>
+                          )}
                         </td>
                         <td>
                           <input
@@ -833,6 +840,11 @@ export default function BillForm() {
                       />
                       {errors[`item_${index}_product`] && (
                         <div className="text-danger mt-1" style={{ fontSize: "0.7rem" }}>{errors[`item_${index}_product`]}</div>
+                      )}
+                      {selectedProduct?.data?.current_stock != null && (
+                        <div className="mt-1 fw-medium text-muted" style={{ fontSize: "0.7rem" }}>
+                          Stock: {selectedProduct.data.current_stock}
+                        </div>
                       )}
                     </div>
 

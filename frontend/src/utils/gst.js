@@ -190,8 +190,18 @@ export function calculateInvoicePreview({
     const rate = round2(Number(item.rate));
     const quantity = round2(Number(item.quantity));
     const taxRate = round2(Number(item.taxRate ?? item.tax_rate ?? 0));
-    const exclusiveRate = calcExclusiveRate(rate, taxRate, priceIncludesGst);
-    const baseValue = round2(exclusiveRate * quantity);
+
+    let exclusiveRate, baseValue, grossValue;
+
+    if (priceIncludesGst && taxRate > 0) {
+      grossValue = round2(rate * quantity);
+      baseValue = round2(grossValue / (1 + taxRate / 100));
+      exclusiveRate = round2(rate / (1 + taxRate / 100));
+    } else {
+      exclusiveRate = rate;
+      baseValue = round2(exclusiveRate * quantity);
+      grossValue = baseValue;
+    }
 
     return {
       ...item,
@@ -200,6 +210,7 @@ export function calculateInvoicePreview({
       taxRate,
       exclusiveRate,
       baseValue,
+      grossValue,
     };
   });
 
@@ -217,14 +228,19 @@ export function calculateInvoicePreview({
     let totalValue = 0;
 
     if (priceIncludesGst) {
-      taxValue = round2(taxableValue * (item.taxRate / 100));
+      if (discountValue <= 0) {
+        totalValue = item.grossValue;
+        taxValue = round2(totalValue - taxableValue);
+      } else {
+        totalValue = round2(taxableValue * (1 + item.taxRate / 100));
+        taxValue = round2(totalValue - taxableValue);
+      }
       if (igstRate > 0) {
         igstAmount = taxValue;
       } else if (cgstRate > 0 && sgstRate > 0) {
         cgstAmount = round2(taxValue / 2);
         sgstAmount = round2(taxValue - cgstAmount);
       }
-      totalValue = round2(taxableValue + taxValue);
     } else {
       cgstAmount = round2(taxableValue * (cgstRate / 100));
       sgstAmount = round2(taxableValue * (sgstRate / 100));
